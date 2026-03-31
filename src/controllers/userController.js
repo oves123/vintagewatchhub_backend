@@ -132,3 +132,16 @@ exports.addToVault = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.acceptTerms = async (req, res) => {
+  try {
+    const { id } = req.user; // From auth middleware
+    await pool.query(
+      "UPDATE users SET terms_accepted = TRUE WHERE id = $1",
+      [id]
+    );
+    res.json({ message: "Terms accepted successfully", terms_accepted: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

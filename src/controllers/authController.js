@@ -21,7 +21,10 @@ exports.register = async (req, res) => {
 
     res.json({
       message: "User registered successfully",
-      user: result.rows[0]
+      user: {
+        ...result.rows[0],
+        terms_accepted: false
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -147,7 +150,8 @@ exports.login = async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        terms_accepted: user.terms_accepted
       }
     });
 
