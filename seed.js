@@ -112,10 +112,10 @@ async function seed() {
     `);
 
     // 7. Seed Categories
-    const coreCategories = ["Pre-Owned Watches", "Watch Lots", "Accessories", "Tools & Parts"];
+    const coreCategories = ["Pre-Owned Watches", "New Watches", "Watch Lots", "Accessories", "Tools & Parts"];
 
     // Cleanup extra categories
-    await pool.query("DELETE FROM categories WHERE name NOT IN ($1, $2, $3, $4)", coreCategories);
+    await pool.query("DELETE FROM categories WHERE name NOT IN ($1, $2, $3, $4, $5)", coreCategories);
 
     for (const cat of coreCategories) {
       await pool.query("INSERT INTO categories (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", [cat]);
@@ -131,6 +131,10 @@ async function seed() {
       { cat: "Pre-Owned Watches", name: "case_condition", label: "Case/Bezel Condition" },
       { cat: "Pre-Owned Watches", name: "movement_status", label: "Movement Performance" },
       { cat: "Pre-Owned Watches", name: "band_condition", label: "Bracelet/Strap Condition" },
+      { cat: "New Watches", name: "crystal", label: "Crystal Condition" },
+      { cat: "New Watches", name: "case_condition", label: "Case/Bezel Condition" },
+      { cat: "New Watches", name: "movement_status", label: "Movement Performance" },
+      { cat: "New Watches", name: "band_condition", label: "Bracelet/Strap Condition" },
       { cat: "Watch Lots", name: "lot_completeness", label: "Lot Completeness" },
       { cat: "Tools & Parts", name: "part_compatibility", label: "Part Compatibility" }
     ];
@@ -152,6 +156,13 @@ async function seed() {
       { cat: "Pre-Owned Watches", name: "movement", label: "Movement", type: "select", options: ["Automatic", "Manual", "Quartz"], required: true },
       { cat: "Pre-Owned Watches", name: "case_material", label: "Case Material", type: "select", options: ["Stainless Steel", "Gold", "Titanium", "Ceramic"], required: true },
       { cat: "Pre-Owned Watches", name: "box_papers", label: "Box & Papers", type: "select", options: ["Full Set", "Box Only", "Papers Only", "Watch Only"], required: true },
+
+      { cat: "New Watches", name: "brand", label: "Brand", type: "text", required: true },
+      { cat: "New Watches", name: "reference_number", label: "Reference Number", type: "text", required: false },
+      { cat: "New Watches", name: "movement", label: "Movement", type: "select", options: ["Automatic", "Manual", "Quartz"], required: true },
+      { cat: "New Watches", name: "case_material", label: "Case Material", type: "select", options: ["Stainless Steel", "Gold", "Titanium", "Ceramic"], required: true },
+      { cat: "New Watches", name: "box_papers", label: "Box & Papers", type: "select", options: ["Full Set", "Box Only", "Papers Only", "Watch Only"], required: true },
+
 
       { cat: "Watch Lots", name: "item_count", label: "Item Count", type: "number", required: true },
       { cat: "Watch Lots", name: "lot_type", label: "Lot Type", type: "select", options: ["Serviceable", "Parts Only", "Mixed"], required: true },
