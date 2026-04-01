@@ -200,7 +200,7 @@ exports.getProducts = async (req, res) => {
       FROM products
       LEFT JOIN categories ON products.category_id = categories.id
       LEFT JOIN users ON products.seller_id = users.id
-      WHERE products.status IN ('approved', 'under_offer')
+      WHERE products.status = 'approved'
     `;
     const params = [];
 

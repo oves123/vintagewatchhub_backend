@@ -161,7 +161,8 @@ exports.getUserDeals = async (req, res) => {
 
     const result = await pool.query(
       `SELECT d.*, p.title, p.images, 
-              u_buyer.name as buyer_name, u_seller.name as seller_name
+              u_buyer.name as buyer_name, u_seller.name as seller_name,
+              u_seller.payment_methods as seller_payment_info
        FROM product_deals d
        JOIN products p ON d.product_id = p.id
        JOIN users u_buyer ON d.buyer_id = u_buyer.id
@@ -171,6 +172,38 @@ exports.getUserDeals = async (req, res) => {
       [user_id]
     );
     res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Buyer marks deal as PAID
+exports.markDealAsPaid = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { buyer_id, payment_method } = req.body;
+
+    const result = await pool.query(
+      "UPDATE product_deals SET payment_status = 'PAID', payment_method = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND buyer_id = $3 AND payment_status = 'PENDING' RETURNING *",
+      [payment_method, id, buyer_id]
+    );
+
+    if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal already paid' });
+
+    // Notify Seller
+    try {
+      const deal = result.rows[0];
+      const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+      await notificationService.createNotification({
+        user_id: deal.seller_id,
+        title: "Payment Received! 💸",
+        message: `The buyer has marked the deal for "${productRes.rows[0]?.title || 'Watch'}" as PAID via ${payment_method}. Please verify and ship.`,
+        type: 'success',
+        link: '/profile?tab=selling'
+      });
+    } catch (err) { console.error("Paid notification failed:", err.message); }
+
+    res.json({ message: 'Deal marked as PAID. Seller has been notified.', deal: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

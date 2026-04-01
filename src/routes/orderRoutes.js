@@ -11,6 +11,7 @@ router.get("/buyer/:user_id", authMiddleware, orderController.getBuyerOrders);
 router.get("/seller/:seller_id", authMiddleware, orderController.getSellerOrders);
 router.get("/user-deals/:user_id", authMiddleware, orderController.getUserDeals);
 
+router.patch("/:id/mark-paid", authMiddleware, orderController.markDealAsPaid);
 router.patch("/:id/shipped", authMiddleware, orderController.markShipped);
 router.patch("/:id/delivered", authMiddleware, orderController.markDelivered); // Seller manually marks
 router.patch("/:id/confirm-received", authMiddleware, orderController.confirmReceived); // Buyer manually marks

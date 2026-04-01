@@ -23,17 +23,25 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, phone, bio, shipping_address, preferences } = req.body;
+    const { name, phone, bio, shipping_address, preferences, payment_methods } = req.body;
 
     const result = await pool.query(
       `UPDATE users 
        SET name = COALESCE($1, name), 
            phone = COALESCE($2, phone), 
            bio = COALESCE($3, bio), 
-           preferences = COALESCE($4, preferences)
-       WHERE id = $5 
-       RETURNING id, name, email, phone, bio, profile_image, preferences`,
-      [name, phone, bio, preferences ? JSON.stringify(preferences) : null, id]
+           preferences = COALESCE($4, preferences),
+           payment_methods = COALESCE($5, payment_methods)
+       WHERE id = $6
+       RETURNING id, name, email, phone, bio, profile_image, preferences, payment_methods`,
+      [
+        name, 
+        phone, 
+        bio, 
+        preferences ? JSON.stringify(preferences) : null, 
+        payment_methods ? JSON.stringify(payment_methods) : null,
+        id
+      ]
     );
 
     res.json({
