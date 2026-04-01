@@ -15,7 +15,9 @@ exports.createProduct = async (req, res) => {
       condition_details,
       shipping_info,
       payment_info,
-      status
+      status,
+      shipping_fee,
+      shipping_type
     } = req.body;
 
     const images = req.files ? req.files.map(f => f.filename) : [];
@@ -35,8 +37,8 @@ exports.createProduct = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
-       condition_code, item_specifics, condition_details, shipping_info, payment_info, status)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *`,
       [
         title, 
@@ -51,7 +53,9 @@ exports.createProduct = async (req, res) => {
         typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {}),
         typeof shipping_info === 'string' ? shipping_info : JSON.stringify(shipping_info || {}),
         typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
-        finalStatus
+        finalStatus,
+        shipping_fee || 0,
+        shipping_type || 'fixed'
       ]
     );
 
@@ -85,7 +89,8 @@ exports.updateProduct = async (req, res) => {
     const { id } = req.params;
     const {
       title, description, price, category_id, product_type,
-      condition_code, item_specifics, condition_details, shipping_info, payment_info, status
+      condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
+      shipping_fee, shipping_type
     } = req.body;
 
     // Handle new images if any
@@ -102,12 +107,14 @@ exports.updateProduct = async (req, res) => {
       typeof shipping_info === 'string' ? shipping_info : JSON.stringify(shipping_info || {}),
       typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
       status, 
+      shipping_fee || 0,
+      shipping_type || 'fixed',
       id
     ];
 
     if (req.files && req.files.length > 0) {
       const newImages = req.files.map(f => f.filename);
-      imagesUpdateQuery = ", images = $13";
+      imagesUpdateQuery = ", images = $15";
       queryParams.push(JSON.stringify(newImages));
     }
 
@@ -115,9 +122,10 @@ exports.updateProduct = async (req, res) => {
       `UPDATE products SET 
         title = $1, description = $2, price = $3, category_id = $4, product_type = $5, 
         condition_code = $6, item_specifics = $7, condition_details = $8, 
-        shipping_info = $9, payment_info = $10, status = $11
+        shipping_info = $9, payment_info = $10, status = $11,
+        shipping_fee = $12, shipping_type = $13
         ${imagesUpdateQuery}
-      WHERE id = $12 RETURNING *`,
+      WHERE id = $14 RETURNING *`,
       queryParams
     );
 
