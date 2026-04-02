@@ -200,7 +200,7 @@ exports.getMyListings = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
   try {
-    const { search, category, brand, minPrice, maxPrice, condition, format, sort } = req.query;
+    const { search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type } = req.query;
 
     let query = `
       SELECT products.*, categories.name AS category_name,
@@ -253,6 +253,11 @@ exports.getProducts = async (req, res) => {
         return `$${params.length}`;
       });
       query += ` AND products.product_type IN (${formatPlaceholders.join(', ')})`;
+    }
+
+    if (strap_type) {
+      params.push(strap_type);
+      query += ` AND products.condition_details->>'strap_type' = $${params.length}`;
     }
 
     if (sort === "lowest_price") {
