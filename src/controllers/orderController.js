@@ -181,13 +181,17 @@ exports.getUserDeals = async (req, res) => {
 exports.markDealAsPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { buyer_id, payment_method } = req.body;
+    const { payment_method } = req.body;
+    const userId = req.user.id;
     const receipt = req.file ? req.file.filename : null;
 
+    console.log("markDealAsPaid debug:", { id, userId, payment_method, receipt });
+    
     const result = await pool.query(
-      "UPDATE product_deals SET payment_status = 'PAID', payment_method = $1, payment_receipt = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND buyer_id = $4 AND payment_status = 'PENDING' RETURNING *",
-      [payment_method, receipt, id, buyer_id]
+      "UPDATE product_deals SET status = 'PAID', payment_status = 'PAID', payment_method = $1, payment_receipt = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND buyer_id = $4 AND status = 'ACCEPTED' AND payment_status = 'PENDING' RETURNING *",
+      [payment_method, receipt, id, userId]
     );
+    console.log("UPDATE result rows count:", result.rows.length);
 
     if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal already paid' });
 
