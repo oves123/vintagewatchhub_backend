@@ -182,10 +182,11 @@ exports.markDealAsPaid = async (req, res) => {
   try {
     const { id } = req.params;
     const { buyer_id, payment_method } = req.body;
+    const receipt = req.file ? req.file.filename : null;
 
     const result = await pool.query(
-      "UPDATE product_deals SET payment_status = 'PAID', payment_method = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND buyer_id = $3 AND payment_status = 'PENDING' RETURNING *",
-      [payment_method, id, buyer_id]
+      "UPDATE product_deals SET payment_status = 'PAID', payment_method = $1, payment_receipt = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND buyer_id = $4 AND payment_status = 'PENDING' RETURNING *",
+      [payment_method, receipt, id, buyer_id]
     );
 
     if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal already paid' });
@@ -230,11 +231,11 @@ exports.markShipped = async (req, res) => {
       return res.status(400).json({ message: 'Invalid tracking number. Must be between 8 and 25 characters.' });
     }
 
-    // Update deal status to 'shipped'
+    // Update deal status to 'SHIPPED' or update details if already SHIPPED
     await pool.query(
       `UPDATE product_deals 
        SET status = 'SHIPPED', tracking_number = $1, courier_name = $2, 
-           shipped_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+           shipped_at = COALESCE(shipped_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP 
        WHERE id = $3`,
       [tracking_number || null, courier_name || 'Hand Delivery', id]
     );
@@ -259,7 +260,10 @@ exports.markShipped = async (req, res) => {
       });
     } catch (err) { console.error("Ship notification failed:", err.message); }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: "Internal server error", 
+      message: "Shipping update failed: " + error.message 
+    });
   }
 };
 

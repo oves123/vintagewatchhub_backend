@@ -15,19 +15,20 @@ exports.createOffer = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    if (!productCheck.rows[0].allow_offers) {
-      return res.status(400).json({ message: "This product does not accept offers" });
-    }
+    // Temporarily disabled to allow offers on existing products without the flag
+    // if (!productCheck.rows[0].allow_offers) {
+    //   return res.status(400).json({ message: "This product does not accept offers" });
+    // }
 
-    // 2. Check offer limit (5 per product/buyer)
+    // 2. Check offer limit (5 per product/buyer) - TEMPORARILY DISABLED FOR TESTING
     const limitCheck = await pool.query(
       "SELECT COUNT(*) FROM product_offers WHERE product_id = $1 AND buyer_id = $2",
       [product_id, buyer_id]
     );
 
-    if (parseInt(limitCheck.rows[0].count) >= 5) {
-      return res.status(400).json({ message: "You have reached the limit of 5 offers for this item" });
-    }
+    // if (parseInt(limitCheck.rows[0].count) >= 5) {
+    //   return res.status(400).json({ message: "You have reached the limit of 5 offers for this item" });
+    // }
 
     // 3. Create offer with 48h expiry
     const newOfferCount = parseInt(limitCheck.rows[0].count) + 1;
@@ -58,13 +59,20 @@ exports.respondToOffer = async (req, res) => {
     const { id } = req.params;
     const { status, counter_amount } = req.body; // status: 'accepted', 'declined', 'countered', 'rejected'
 
-    // Update offer status
+    // 1. Get current offer state
+    const currentRes = await pool.query("SELECT * FROM product_offers WHERE id = $1", [id]);
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ message: "Offer not found" });
+    }
+    const oldOffer = currentRes.rows[0];
+
+    // 2. Update offer status
     const result = await pool.query(
       `UPDATE product_offers 
        SET status = $1, counter_amount = $2
        WHERE id = $3 
        RETURNING *`,
-      [status, counter_amount || null, id]
+      [status, status === 'countered' ? counter_amount : oldOffer.counter_amount, id]
     );
 
     if (result.rows.length === 0) {
@@ -91,10 +99,13 @@ exports.respondToOffer = async (req, res) => {
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
+        // Use counter_amount if it was a counter-offer being accepted, otherwise use original amount
+        const finalAmount = oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount;
+
         await pool.query(
           `INSERT INTO product_deals (product_id, buyer_id, seller_id, offer_id, amount, status, expires_at)
            VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6)`,
-          [offer.product_id, offer.buyer_id, offer.seller_id, offer.id, offer.amount, expiresAt]
+          [offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, expiresAt]
         );
 
         // 3. Update product status to 'under_offer' immediately to lock it (but still visible in search as per new requirement)
@@ -102,8 +113,27 @@ exports.respondToOffer = async (req, res) => {
           "UPDATE products SET status = 'under_offer' WHERE id = $1",
           [offer.product_id]
         );
+
+        // 4. Send System Message to Chat 
+        const chatRes = await pool.query(
+          "SELECT id FROM chats WHERE product_id = $1 AND buyer_id = $2 AND seller_id = $3",
+          [offer.product_id, offer.buyer_id, offer.seller_id]
+        );
+
+        if (chatRes.rows.length > 0) {
+          const chatId = chatRes.rows[0].id;
+          const systemMsg = await pool.query(
+            "INSERT INTO messages (chat_id, sender_id, message, type, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+            [chatId, offer.seller_id, "Offer Accepted! Please go to your Profile to complete the payment.", "system_deal", JSON.stringify({ offer_id: offer.id, status: 'accepted' })]
+          );
+
+          const io = req.app.get("io");
+          if (io) {
+            io.to(`chat_${chatId}`).emit("newMessage", systemMsg.rows[0]);
+          }
+        }
       } catch (dealErr) {
-        console.error("Deal creation failed on offer acceptance:", dealErr);
+        console.error("Deal creation/notification failed on offer acceptance:", dealErr);
       }
     }
 
@@ -179,16 +209,17 @@ exports.getUserOffers = async (req, res) => {
     const result = await pool.query(
       `SELECT o.*, p.title, p.images, p.price as listed_price, 
               u_buyer.name as buyer_name, u_seller.name as seller_name,
-              CASE WHEN o.buyer_id = $1 THEN u_seller.name ELSE u_buyer.name END as counterparty_name,
-              d.status as deal_status, d.id as deal_id, d.expires_at
-       FROM product_offers o
-       JOIN products p ON o.product_id = p.id
-       JOIN users u_buyer ON o.buyer_id = u_buyer.id
-       JOIN users u_seller ON o.seller_id = u_seller.id
-       LEFT JOIN product_deals d ON o.id = d.offer_id
-       WHERE o.buyer_id = $1 OR o.seller_id = $1
-       ORDER BY o.created_at DESC`,
-      [user_id]
+             CASE WHEN o.buyer_id = $1 THEN u_seller.name ELSE u_buyer.name END as counterparty_name,
+             (SELECT id FROM chats WHERE product_id = o.product_id AND buyer_id = o.buyer_id AND seller_id = o.seller_id LIMIT 1) as chat_id,
+             d.status as deal_status, d.id as deal_id, d.expires_at
+      FROM product_offers o
+      JOIN products p ON o.product_id = p.id
+      JOIN users u_buyer ON o.buyer_id = u_buyer.id
+      JOIN users u_seller ON o.seller_id = u_seller.id
+      LEFT JOIN product_deals d ON o.id = d.offer_id
+      WHERE o.buyer_id = $1 OR o.seller_id = $1
+      ORDER BY o.created_at DESC`,
+     [user_id]
     );
     res.json(result.rows);
   } catch (error) {

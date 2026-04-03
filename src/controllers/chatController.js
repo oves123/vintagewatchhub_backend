@@ -12,8 +12,20 @@ exports.createOrGetChat = async (req, res) => {
       [product_id, buyer_id, seller_id]
     );
 
+    const chatQuery = `
+      SELECT c.*, p.title as product_title, p.images[0] as product_image, p.price as product_price, p.status as product_status,
+             u_buyer.name as buyer_name, u_seller.name as seller_name,
+             u_buyer.profile_image as buyer_avatar, u_seller.profile_image as seller_avatar
+      FROM chats c
+      JOIN products p ON c.product_id = p.id
+      JOIN users u_buyer ON c.buyer_id = u_buyer.id
+      JOIN users u_seller ON c.seller_id = u_seller.id
+      WHERE c.id = $1
+    `;
+
     if (check.rows.length > 0) {
-      return res.json(check.rows[0]);
+      const fullChat = await pool.query(chatQuery, [check.rows[0].id]);
+      return res.json(fullChat.rows[0]);
     }
 
     // Create new chat
@@ -22,7 +34,8 @@ exports.createOrGetChat = async (req, res) => {
       [product_id, buyer_id, seller_id]
     );
 
-    res.status(201).json(result.rows[0]);
+    const newFullChat = await pool.query(chatQuery, [result.rows[0].id]);
+    res.status(201).json(newFullChat.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
