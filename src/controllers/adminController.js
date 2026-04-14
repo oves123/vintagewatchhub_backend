@@ -181,20 +181,23 @@ exports.getProducts = async (req, res) => {
 exports.updateProductStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, reason } = req.body;
     
     if (!['approved', 'pending', 'rejected'].includes(status)) {
       return res.status(400).json({ error: "Invalid status value" });
     }
 
-    const result = await pool.query("UPDATE products SET status=$1 WHERE id=$2", [status, id]);
+    const result = await pool.query(
+      "UPDATE products SET status=$1, rejection_reason=$2 WHERE id=$3", 
+      [status, status === 'rejected' ? reason : null, id]
+    );
     
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
 
     // Log the action
-    await logAdminAction(req.user.id, `update_product_status_${status}`, 'product', id, { status }, req.ip);
+    await logAdminAction(req.user.id, `update_product_status_${status}`, 'product', id, { status, reason }, req.ip);
 
     // Get the product to find the seller_id
     const productRes = await pool.query("SELECT seller_id, title FROM products WHERE id = $1", [id]);
@@ -207,7 +210,7 @@ exports.updateProductStatus = async (req, res) => {
         title: isApproved ? "Listing Approved! 🚀" : "Listing Update Needed",
         message: isApproved 
           ? `Your listing "${product.title}" has been approved and is now live.`
-          : `Your listing "${product.title}" has been reviewed and requires updates.`,
+          : `Your listing "${product.title}" has been reviewed and requires updates.${reason ? ` Reason: ${reason}` : ''}`,
         type: isApproved ? 'success' : 'warning',
         link: '/profile?tab=selling'
       });

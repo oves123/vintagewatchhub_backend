@@ -134,31 +134,6 @@ CREATE TABLE IF NOT EXISTS chats (
   PRIMARY KEY (id)
 );
 
--- Table: products
-CREATE TABLE IF NOT EXISTS products (
-  id SERIAL,
-  title character varying(255),
-  description text,
-  price numeric,
-  seller_id integer,
-  category_id integer,
-  product_type character varying(20),
-  auction_end timestamp without time zone,
-  image character varying(255),
-  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-  item_specifics jsonb DEFAULT '{}'::jsonb,
-  status character varying(50) DEFAULT 'approved'::character varying,
-  images jsonb DEFAULT '[]'::jsonb,
-  condition_code character varying(50),
-  condition_details jsonb DEFAULT '{}'::jsonb,
-  shipping_info jsonb DEFAULT '{}'::jsonb,
-  payment_info jsonb DEFAULT '{}'::jsonb,
-  allow_offers boolean DEFAULT false,
-  buy_it_now_price numeric,
-  views integer DEFAULT 0,
-  PRIMARY KEY (id)
-);
-
 -- Table: messages
 CREATE TABLE IF NOT EXISTS messages (
   id SERIAL,
@@ -289,25 +264,11 @@ CREATE TABLE IF NOT EXISTS ui_labels (
   PRIMARY KEY (key)
 );
 
--- Table: product_deals
-CREATE TABLE IF NOT EXISTS product_deals (
+-- Table: quick_replies
+CREATE TABLE IF NOT EXISTS quick_replies (
   id SERIAL,
-  product_id integer,
-  seller_id integer,
-  buyer_id integer,
-  offer_id integer,
-  amount numeric NOT NULL,
-  status character varying(50) DEFAULT 'accepted'::character varying,
-  tracking_number character varying(100),
-  expires_at timestamp without time zone,
+  text text NOT NULL,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-  cancel_reason text,
-  dispute_reason text,
-  shipped_at timestamp without time zone,
-  delivered_at timestamp without time zone,
-  buyer_confirmed_at timestamp without time zone,
-  seller_delivered_at timestamp without time zone,
   PRIMARY KEY (id)
 );
 
@@ -338,14 +299,90 @@ CREATE TABLE IF NOT EXISTS users (
   city text,
   state text,
   pincode text,
+  terms_accepted boolean DEFAULT false,
   PRIMARY KEY (id)
 );
 
--- Table: quick_replies
-CREATE TABLE IF NOT EXISTS quick_replies (
+-- Table: banners
+CREATE TABLE IF NOT EXISTS banners (
   id SERIAL,
-  text text NOT NULL,
+  title character varying(255),
+  subtitle text,
+  image_url text NOT NULL,
+  link_url character varying(255),
+  type character varying(50) DEFAULT 'hero'::character varying,
+  is_active boolean DEFAULT true,
+  display_order integer DEFAULT 0,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id)
+);
+
+-- Table: products
+CREATE TABLE IF NOT EXISTS products (
+  id SERIAL,
+  title character varying(255),
+  description text,
+  price numeric,
+  seller_id integer,
+  category_id integer,
+  product_type character varying(20),
+  auction_end timestamp without time zone,
+  image character varying(255),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  item_specifics jsonb DEFAULT '{}'::jsonb,
+  status character varying(50) DEFAULT 'approved'::character varying,
+  images jsonb DEFAULT '[]'::jsonb,
+  condition_code character varying(50),
+  condition_details jsonb DEFAULT '{}'::jsonb,
+  shipping_info jsonb DEFAULT '{}'::jsonb,
+  payment_info jsonb DEFAULT '{}'::jsonb,
+  allow_offers boolean DEFAULT false,
+  buy_it_now_price numeric,
+  views integer DEFAULT 0,
+  shipping_fee numeric DEFAULT 0,
+  shipping_type character varying(50) DEFAULT 'fixed'::character varying,
+  PRIMARY KEY (id)
+);
+
+-- Table: product_deals
+CREATE TABLE IF NOT EXISTS product_deals (
+  id SERIAL,
+  product_id integer,
+  seller_id integer,
+  buyer_id integer,
+  offer_id integer,
+  amount numeric NOT NULL,
+  status character varying(50) DEFAULT 'accepted'::character varying,
+  tracking_number character varying(100),
+  expires_at timestamp without time zone,
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  cancel_reason text,
+  dispute_reason text,
+  shipped_at timestamp without time zone,
+  delivered_at timestamp without time zone,
+  buyer_confirmed_at timestamp without time zone,
+  seller_delivered_at timestamp without time zone,
+  payment_status character varying DEFAULT 'PENDING'::character varying,
+  payment_method character varying,
+  payment_receipt text,
+  courier_name character varying(255),
+  PRIMARY KEY (id)
+);
+
+-- Table: reports
+CREATE TABLE IF NOT EXISTS reports (
+  id SERIAL,
+  reporter_id integer,
+  reported_user_id integer,
+  product_id integer,
+  reason character varying(100) NOT NULL,
+  description text,
+  status character varying(20) DEFAULT 'pending'::character varying,
+  admin_notes text,
+  created_at timestamp without time zone DEFAULT now(),
+  resolved_at timestamp without time zone,
   PRIMARY KEY (id)
 );
 
@@ -370,3 +407,6 @@ ALTER TABLE product_deals ADD CONSTRAINT product_deals_product_id_fkey FOREIGN K
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_seller_id_fkey FOREIGN KEY (seller_id) REFERENCES users(id);
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_buyer_id_fkey FOREIGN KEY (buyer_id) REFERENCES users(id);
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_offer_id_fkey FOREIGN KEY (offer_id) REFERENCES product_offers(id);
+ALTER TABLE reports ADD CONSTRAINT reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES users(id);
+ALTER TABLE reports ADD CONSTRAINT reports_reported_user_id_fkey FOREIGN KEY (reported_user_id) REFERENCES users(id);
+ALTER TABLE reports ADD CONSTRAINT reports_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id);
