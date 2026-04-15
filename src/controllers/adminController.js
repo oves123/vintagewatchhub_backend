@@ -51,7 +51,7 @@ exports.getUsers = async (req, res) => {
   try {
     const query = `
       SELECT 
-        u.id, u.name, u.email, u.role, u.phone, u.city, u.state, u.pincode, u.profile_image, u.is_verified, u.joined_date, u.is_active,
+        u.id, u.name, u.email, u.role, u.phone, u.city, u.state, u.pincode, u.profile_image, u.is_verified, u.joined_date, u.is_active, u.payment_methods,
         (SELECT COUNT(*) FROM products WHERE seller_id = u.id) as items_listed,
         (SELECT COUNT(*) FROM orders WHERE buyer_id = u.id) as items_bought
       FROM users u
@@ -70,7 +70,7 @@ exports.getUserDetail = async (req, res) => {
     
     // User basic info
     const userResult = await pool.query(
-      "SELECT id, name, email, phone, city, state, pincode, bio, profile_image, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date, role FROM users WHERE id = $1",
+      "SELECT id, name, email, phone, city, state, pincode, bio, profile_image, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date, role, payment_methods FROM users WHERE id = $1",
       [id]
     );
 
@@ -142,20 +142,73 @@ exports.toggleUserStatus = async (req, res) => {
 };
 
 exports.deleteUser = async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    const result = await pool.query("DELETE FROM users WHERE id=$1", [id]);
+    
+    // Start Transaction
+    await client.query('BEGIN');
+
+    // 1. Delete simple one-way relations
+    await client.query("DELETE FROM watchlist WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM notifications WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM security_logs WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM user_addresses WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM watch_vault WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM product_views WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM visitor_logs WHERE id IN (SELECT id FROM visitor_logs WHERE ip_address IN (SELECT ip_address FROM admin_audit_logs WHERE admin_id = $1))", [id]).catch(() => {});
+
+    // 2. Delete Interactions (Bids, Offers, Deals, Orders)
+    await client.query("DELETE FROM bids WHERE user_id = $1", [id]);
+    await client.query("DELETE FROM product_offers WHERE buyer_id = $1 OR seller_id = $2", [id, id]);
+    await client.query("DELETE FROM product_deals WHERE buyer_id = $1 OR seller_id = $2", [id, id]);
+    await client.query("DELETE FROM orders WHERE buyer_id = $1 OR seller_id = $2", [id, id]);
+    await client.query("DELETE FROM reviews WHERE user_id = $1 OR seller_id = $2", [id, id]);
+    await client.query("DELETE FROM reports WHERE reporter_id = $1 OR reported_user_id = $2", [id, id]);
+
+    // 3. Delete Products listed by the user (and their sub-dependencies)
+    const productsRes = await client.query("SELECT id FROM products WHERE seller_id = $1", [id]);
+    for (const p of productsRes.rows) {
+      await client.query("DELETE FROM bids WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM watchlist WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM product_deals WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM product_offers WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE product_id = $1)", [p.id]);
+      await client.query("DELETE FROM chats WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM reviews WHERE product_id = $1", [p.id]);
+      await client.query("DELETE FROM reports WHERE product_id = $1", [p.id]);
+    }
+    await client.query("DELETE FROM products WHERE seller_id = $1", [id]);
+
+    // 4. Delete Communication (Chats and Messages)
+    await client.query("DELETE FROM messages WHERE sender_id = $1 OR chat_id IN (SELECT id FROM chats WHERE buyer_id = $2 OR seller_id = $3)", [id, id, id]);
+    await client.query("DELETE FROM chats WHERE buyer_id = $1 OR seller_id = $2", [id, id]);
+
+    // 5. Update Audit Logs and Settings to NULL (Preserve records)
+    await client.query("UPDATE admin_audit_logs SET admin_id = NULL WHERE admin_id = $1", [id]);
+    await client.query("UPDATE platform_settings SET updated_by = NULL WHERE updated_by = $1", [id]);
+
+    // 6. Delete the User record
+    const result = await client.query("DELETE FROM users WHERE id = $1", [id]);
     
     if (result.rowCount === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Log the action
-    await logAdminAction(req.user.id, 'delete_user', 'user', id, {}, req.ip);
+    // Log the action (as a separate log, using req.user.id for the performing admin)
+    await logAdminAction(req.user.id, 'delete_user_cascaded', 'user', id, { target_id: id }, req.ip);
 
-    res.json({ message: "User deleted" });
+    // Commit Transaction
+    await client.query('COMMIT');
+
+    res.json({ message: "User and all related data purged successfully" });
   } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("User Deletion Error:", error);
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 

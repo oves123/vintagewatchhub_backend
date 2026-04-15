@@ -308,9 +308,24 @@ exports.getBrands = async (req, res) => {
 exports.getProductById = async (req, res) => {
   try {
     const { id } = req.params;
+    const { viewerId } = req.query;
 
-    // Increment views
-    await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
+    // Increment views (Unique per user if viewerId provided)
+    if (viewerId) {
+      const viewCheck = await pool.query(
+        "SELECT id FROM product_views WHERE product_id = $1 AND user_id = $2",
+        [id, viewerId]
+      );
+
+      if (viewCheck.rows.length === 0) {
+        await pool.query("INSERT INTO product_views (product_id, user_id) VALUES ($1, $2)", [id, viewerId]);
+        await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
+      }
+    } else {
+      // For guests, we still increment views but not uniquely (or we could choose to skip)
+      // Standard practice: increment for every visit if no ID
+      await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
+    }
 
     const query = `
       SELECT products.*, categories.name AS category_name,

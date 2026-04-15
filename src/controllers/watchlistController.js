@@ -30,7 +30,7 @@ exports.getWatchlist = async (req, res) => {
   try {
     const { user_id } = req.params;
     const result = await pool.query(
-      `SELECT watchlist.*, products.title, products.price, products.image, products.auction_end
+      `SELECT watchlist.*, products.title, products.price, products.image, products.images, products.product_type, products.auction_end
        FROM watchlist
        JOIN products ON watchlist.product_id = products.id
        WHERE watchlist.user_id = $1`,

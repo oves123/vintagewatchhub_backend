@@ -6,6 +6,10 @@ exports.createOrGetChat = async (req, res) => {
   try {
     const { product_id, buyer_id, seller_id } = req.body;
 
+    if (buyer_id === seller_id) {
+       return res.status(400).json({ error: "You cannot initiate a chat with yourself." });
+    }
+
     // Check if chat exists
     const check = await pool.query(
       "SELECT * FROM chats WHERE product_id = $1 AND buyer_id = $2 AND seller_id = $3",
