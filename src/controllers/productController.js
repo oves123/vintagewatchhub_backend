@@ -20,8 +20,8 @@ exports.createProduct = async (req, res) => {
       shipping_type
     } = req.body;
 
-    const images = req.files ? req.files.map(f => f.filename) : [];
-    const hasVideo = req.files && req.files.some(f => f.mimetype.startsWith('video/'));
+    const images = req.files ? req.files.map(f => f.path) : [];
+    const hasVideo = req.files && req.files.some(f => f.mimetype && f.mimetype.startsWith('video/'));
 
     if (status !== 'draft' && !hasVideo) {
       return res.json({ message: "At least one video is mandatory for listing." });
@@ -113,7 +113,7 @@ exports.updateProduct = async (req, res) => {
     ];
 
     if (req.files && req.files.length > 0) {
-      const newImages = req.files.map(f => f.filename);
+      const newImages = req.files.map(f => f.path);
       imagesUpdateQuery = ", images = $15";
       queryParams.push(JSON.stringify(newImages));
     }

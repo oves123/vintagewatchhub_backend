@@ -2,17 +2,17 @@ const express = require("express");
 const router = express.Router();
 
 const productController = require("../controllers/productController");
-const upload = require("../utils/upload");
+const cloudUpload = require("../middleware/cloudUpload");
 
 router.post(
  "/create",
- upload.array("images", 10),
+ cloudUpload.array("images", 10),
  productController.createProduct
 );
 
 router.put(
  "/update/:id",
- upload.array("images", 10),
+ cloudUpload.array("images", 10),
  productController.updateProduct
 );
 

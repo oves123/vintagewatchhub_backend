@@ -209,7 +209,8 @@ exports.uploadChatImage = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: "No image file provided" });
     }
-    res.json({ filename: req.file.filename });
+    // Cloudinary returns the full URL in path
+    res.json({ filename: req.file.path });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
