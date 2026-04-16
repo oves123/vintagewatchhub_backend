@@ -1,6 +1,7 @@
 const { Pool } = require("pg");
+const { EventEmitter } = require("events");
 
-const dbMode = process.env.DB_MODE || 'local';
+const dbMode = (process.env.DB_MODE || 'local').toLowerCase();
 const localUrl = process.env.LOCAL_DATABASE_URL || process.env.DATABASE_URL;
 const supabaseUrl = process.env.SUPABASE_DATABASE_URL;
 
@@ -11,8 +12,13 @@ const supabasePool = supabaseUrl ? new Pool({
 }) : null;
 
 // Helper to determine if a query is a "Write" operation
-const isWriteQuery = (text) => {
-  if (typeof text !== 'string') return false;
+const isWriteQuery = (query) => {
+  let text = '';
+  if (typeof query === 'string') {
+    text = query;
+  } else if (query && typeof query === 'object' && query.text) {
+    text = query.text;
+  }
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE|BEGIN|COMMIT|ROLLBACK)/i.test(text);
 };
 
@@ -36,9 +42,8 @@ class DualClient {
     if (this.supabaseClient && (dbMode === 'both' || dbMode === 'supabase')) {
       if (isWrite || dbMode === 'supabase') {
         try {
-          // If we are in "both" mode and it's a write, we execute concurrently but don't let it crash the app if Supabase fails
-          // EXCEPT for BEGIN/COMMIT/ROLLBACK which must succeed or fail together ideally
           if (dbMode === 'both') {
+            // Background sync for "both" mode
             this.supabaseClient.query(text, params).catch(err => {
               console.error("⚠️ Supabase Transaction Sync Error:", err.message);
             });
@@ -60,9 +65,16 @@ class DualClient {
   }
 }
 
-// Wrapper for the Pool
-const pool = {
-  query: async (text, params) => {
+// Wrapper for the Pool using EventEmitter for compatibility
+class DualPool extends EventEmitter {
+  constructor() {
+    super();
+    // Forward errors from internal pools
+    if (localPool) localPool.on('error', (err) => this.emit('error', err));
+    if (supabasePool) supabasePool.on('error', (err) => this.emit('error', err));
+  }
+
+  async query(text, params) {
     const isWrite = isWriteQuery(text);
 
     // 1. Handle "supabase" only mode
@@ -77,25 +89,21 @@ const pool = {
 
     // 3. Handle "both" mode
     if (dbMode === 'both') {
-      // Always execute on Local (Primary for Reads)
       const localResult = await localPool.query(text, params);
 
-      // If it's a Write, sync to Supabase
       if (isWrite && supabasePool) {
         supabasePool.query(text, params).catch(err => {
           console.error("⚠️ Supabase Sync Error (Background):", err.message);
-          console.error("   Query:", text.substring(0, 100) + "...");
         });
       }
 
       return localResult;
     }
 
-    // Fallback to local if nothing else matches
     return localPool ? await localPool.query(text, params) : null;
-  },
+  }
 
-  connect: async () => {
+  async connect() {
     let localClient, supabaseClient;
 
     if (dbMode === 'local' || dbMode === 'both') {
@@ -114,13 +122,23 @@ const pool = {
     }
 
     return new DualClient(localClient, supabaseClient);
-  },
+  }
 
-  // Expose underlying pools if needed
-  localPool,
-  supabasePool
-};
+  // Support for pool.end()
+  async end() {
+    const tasks = [];
+    if (localPool) tasks.push(localPool.end());
+    if (supabasePool) tasks.push(supabasePool.end());
+    return Promise.all(tasks);
+  }
+}
+
+const pool = new DualPool();
+
+// Expose underlying pools for specialized tasks
+pool.localPool = localPool;
+pool.supabasePool = supabasePool;
 
 console.log(`🔌 DB Connection initialized in [${dbMode}] mode.`);
 
-module.exports = pool;
+module.exports = pool;
