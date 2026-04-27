@@ -17,11 +17,23 @@ exports.createProduct = async (req, res) => {
       payment_info,
       status,
       shipping_fee,
-      shipping_type
+      shipping_type,
+      allow_buy_now,
+      buy_it_now_price,
+      allow_auction,
+      starting_bid,
+      auction_end,
+      allow_offers
     } = req.body;
 
     const images = req.files ? req.files.map(f => f.path) : [];
     const hasVideo = req.files && req.files.some(f => f.mimetype && f.mimetype.startsWith('video/'));
+
+    // Listing Options Validation (Max 2 out of 3)
+    const optionsCount = [allow_buy_now, allow_auction, allow_offers].filter(Boolean).length;
+    if (optionsCount > 2) {
+      return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
+    }
 
     if (status !== 'draft' && !hasVideo) {
       return res.json({ message: "At least one video is mandatory for listing." });
@@ -37,8 +49,9 @@ exports.createProduct = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
-       condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       RETURNING *`,
       [
         title, 
@@ -55,7 +68,13 @@ exports.createProduct = async (req, res) => {
         typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
         finalStatus,
         shipping_fee || 0,
-        shipping_type || 'fixed'
+        shipping_type || 'fixed',
+        allow_buy_now || false,
+        buy_it_now_price || null,
+        allow_auction || false,
+        starting_bid || 0,
+        auction_end || null,
+        allow_offers || false
       ]
     );
 
@@ -90,8 +109,15 @@ exports.updateProduct = async (req, res) => {
     const {
       title, description, price, category_id, product_type,
       condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
-      shipping_fee, shipping_type
+      shipping_fee, shipping_type,
+      allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers
     } = req.body;
+
+    // Listing Options Validation (Max 2 out of 3)
+    const optionsCount = [allow_buy_now, allow_auction, allow_offers].filter(Boolean).length;
+    if (optionsCount > 2) {
+      return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
+    }
 
     // Handle new images if any
     let imagesUpdateQuery = "";
@@ -109,6 +135,12 @@ exports.updateProduct = async (req, res) => {
       status, 
       shipping_fee || 0,
       shipping_type || 'fixed',
+      allow_buy_now || false,
+      buy_it_now_price || null,
+      allow_auction || false,
+      starting_bid || 0,
+      auction_end || null,
+      allow_offers || false,
       id
     ];
 
@@ -123,9 +155,11 @@ exports.updateProduct = async (req, res) => {
         title = $1, description = $2, price = $3, category_id = $4, product_type = $5, 
         condition_code = $6, item_specifics = $7, condition_details = $8, 
         shipping_info = $9, payment_info = $10, status = $11,
-        shipping_fee = $12, shipping_type = $13
+        shipping_fee = $12, shipping_type = $13,
+        allow_buy_now = $14, buy_it_now_price = $15, allow_auction = $16,
+        starting_bid = $17, auction_end = $18, allow_offers = $19
         ${imagesUpdateQuery}
-      WHERE id = $14 RETURNING *`,
+      WHERE id = $${queryParams.length} RETURNING *`,
       queryParams
     );
 

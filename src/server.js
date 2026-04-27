@@ -7,7 +7,7 @@ const { Server } = require("socket.io");
 
 const authRoutes = require("./routes/authRoutes");
 const productRoutes = require("./routes/productRoutes");
-// const bidRoutes = require("./routes/bidRoutes");
+const bidRoutes = require("./routes/bidRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const watchlistRoutes = require("./routes/watchlistRoutes");
 const adminRoutes = require("./routes/adminRoutes");
@@ -60,7 +60,7 @@ global.io = io;
 
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
-// app.use("/api/bids", bidRoutes);
+app.use("/api/bids", bidRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/admin", adminRoutes);

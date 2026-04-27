@@ -541,7 +541,10 @@ exports.adminCreateProduct = async (req, res) => {
     const {
       title, description, price, seller_id,
       category_id, product_type, condition_code,
-      item_specifics, condition_details
+      item_specifics, condition_details,
+      allow_buy_now, buy_now_price, 
+      allow_auction, starting_bid, auction_end,
+      allow_offers
     } = req.body;
 
     const images = req.files ? req.files.map(f => f.filename) : [];
@@ -549,8 +552,9 @@ exports.adminCreateProduct = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO products
         (title, description, price, seller_id, category_id, product_type, images,
-         condition_code, item_specifics, condition_details, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved')
+         condition_code, item_specifics, condition_details, status,
+         allow_buy_now, buy_now_price, allow_auction, starting_bid, auction_end, allow_offers)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved', $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         title, description, price || 0, seller_id || req.user.id,
@@ -558,7 +562,13 @@ exports.adminCreateProduct = async (req, res) => {
         JSON.stringify(images),
         condition_code || null,
         typeof item_specifics === 'string' ? item_specifics : JSON.stringify(item_specifics || {}),
-        typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {})
+        typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {}),
+        allow_buy_now || false,
+        buy_now_price || price || 0,
+        allow_auction || false,
+        starting_bid || 0,
+        auction_end || null,
+        allow_offers || false
       ]
     );
 
