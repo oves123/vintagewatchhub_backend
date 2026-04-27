@@ -342,6 +342,7 @@ CREATE TABLE IF NOT EXISTS products (
   views integer DEFAULT 0,
   shipping_fee numeric DEFAULT 0,
   shipping_type character varying(50) DEFAULT 'fixed'::character varying,
+  rejection_reason text,
   PRIMARY KEY (id)
 );
 
@@ -387,26 +388,71 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 -- Constraints --
+ALTER TABLE condition_templates DROP CONSTRAINT IF EXISTS condition_templates_category_id_fkey;
 ALTER TABLE condition_templates ADD CONSTRAINT condition_templates_category_id_fkey FOREIGN KEY (category_id) REFERENCES categories(id);
+
+ALTER TABLE chats DROP CONSTRAINT IF EXISTS chats_product_id_fkey;
 ALTER TABLE chats ADD CONSTRAINT chats_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id);
+
+ALTER TABLE chats DROP CONSTRAINT IF EXISTS chats_buyer_id_fkey;
 ALTER TABLE chats ADD CONSTRAINT chats_buyer_id_fkey FOREIGN KEY (buyer_id) REFERENCES users(id);
+
+ALTER TABLE chats DROP CONSTRAINT IF EXISTS chats_seller_id_fkey;
 ALTER TABLE chats ADD CONSTRAINT chats_seller_id_fkey FOREIGN KEY (seller_id) REFERENCES users(id);
+
+ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_chat_id_fkey;
 ALTER TABLE messages ADD CONSTRAINT messages_chat_id_fkey FOREIGN KEY (chat_id) REFERENCES chats(id);
+
+ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_sender_id_fkey;
 ALTER TABLE messages ADD CONSTRAINT messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES users(id);
+
+ALTER TABLE product_offers DROP CONSTRAINT IF EXISTS product_offers_product_id_fkey;
 ALTER TABLE product_offers ADD CONSTRAINT product_offers_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id);
+
+ALTER TABLE product_offers DROP CONSTRAINT IF EXISTS product_offers_buyer_id_fkey;
 ALTER TABLE product_offers ADD CONSTRAINT product_offers_buyer_id_fkey FOREIGN KEY (buyer_id) REFERENCES users(id);
+
+ALTER TABLE product_offers DROP CONSTRAINT IF EXISTS product_offers_seller_id_fkey;
 ALTER TABLE product_offers ADD CONSTRAINT product_offers_seller_id_fkey FOREIGN KEY (seller_id) REFERENCES users(id);
+
+ALTER TABLE category_specs DROP CONSTRAINT IF EXISTS category_specs_category_id_fkey;
 ALTER TABLE category_specs ADD CONSTRAINT category_specs_category_id_fkey FOREIGN KEY (category_id) REFERENCES categories(id);
+
+ALTER TABLE platform_settings DROP CONSTRAINT IF EXISTS platform_settings_updated_by_fkey;
 ALTER TABLE platform_settings ADD CONSTRAINT platform_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES users(id);
+
+ALTER TABLE watch_vault DROP CONSTRAINT IF EXISTS watch_vault_user_id_fkey;
 ALTER TABLE watch_vault ADD CONSTRAINT watch_vault_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id);
+
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_seller_id_fkey;
 ALTER TABLE reviews ADD CONSTRAINT reviews_seller_id_fkey FOREIGN KEY (seller_id) REFERENCES users(id);
+
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_order_id_fkey;
 ALTER TABLE reviews ADD CONSTRAINT reviews_order_id_fkey FOREIGN KEY (order_id) REFERENCES orders(id);
+
+ALTER TABLE security_logs DROP CONSTRAINT IF EXISTS security_logs_user_id_fkey;
 ALTER TABLE security_logs ADD CONSTRAINT security_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id);
+
+ALTER TABLE admin_audit_logs DROP CONSTRAINT IF EXISTS admin_audit_logs_admin_id_fkey;
 ALTER TABLE admin_audit_logs ADD CONSTRAINT admin_audit_logs_admin_id_fkey FOREIGN KEY (admin_id) REFERENCES users(id);
+
+ALTER TABLE product_deals DROP CONSTRAINT IF EXISTS product_deals_product_id_fkey;
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id);
+
+ALTER TABLE product_deals DROP CONSTRAINT IF EXISTS product_deals_seller_id_fkey;
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_seller_id_fkey FOREIGN KEY (seller_id) REFERENCES users(id);
+
+ALTER TABLE product_deals DROP CONSTRAINT IF EXISTS product_deals_buyer_id_fkey;
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_buyer_id_fkey FOREIGN KEY (buyer_id) REFERENCES users(id);
+
+ALTER TABLE product_deals DROP CONSTRAINT IF EXISTS product_deals_offer_id_fkey;
 ALTER TABLE product_deals ADD CONSTRAINT product_deals_offer_id_fkey FOREIGN KEY (offer_id) REFERENCES product_offers(id);
+
+ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_reporter_id_fkey;
 ALTER TABLE reports ADD CONSTRAINT reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES users(id);
+
+ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_reported_user_id_fkey;
 ALTER TABLE reports ADD CONSTRAINT reports_reported_user_id_fkey FOREIGN KEY (reported_user_id) REFERENCES users(id);
+
+ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_product_id_fkey;
 ALTER TABLE reports ADD CONSTRAINT reports_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id);
