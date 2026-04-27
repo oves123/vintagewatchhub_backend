@@ -10,8 +10,10 @@ exports.getStats = async (req, res) => {
     const pendingProducts = await pool.query("SELECT COUNT(*) FROM products WHERE status = 'pending'");
     const watchlistCount = await pool.query("SELECT COUNT(*) FROM watchlist");
     const totalValue = await pool.query("SELECT SUM(price) FROM products WHERE status = 'approved'");
-    const orderCount = await pool.query("SELECT COUNT(*) FROM orders");
-    const totalTransactions = await pool.query("SELECT SUM(price) FROM orders");
+    const orderCount = await pool.query("SELECT COUNT(*) FROM product_deals WHERE status = 'CONFIRMED'");
+    const totalTransactions = await pool.query("SELECT SUM(amount) FROM product_deals WHERE status = 'CONFIRMED'");
+    const commissionEarned = await pool.query("SELECT SUM(commission_amount) FROM product_deals WHERE status = 'CONFIRMED'");
+    const pendingPayouts = await pool.query("SELECT SUM(seller_payout) FROM product_deals WHERE status = 'CONFIRMED' AND payout_status = 'PENDING'");
     
     // Auction specific metrics
     const bidCount = await pool.query("SELECT COUNT(*) FROM bids").catch(() => ({ rows: [{ count: 0 }] }));
@@ -20,7 +22,7 @@ exports.getStats = async (req, res) => {
     
     // Detailed User Metrics
     const sellerCount = await pool.query("SELECT COUNT(DISTINCT seller_id) FROM products");
-    const buyerCount = await pool.query("SELECT COUNT(DISTINCT buyer_id) FROM orders").catch(() => ({ rows: [{ count: 0 }] }));
+    const buyerCount = await pool.query("SELECT COUNT(DISTINCT buyer_id) FROM product_deals").catch(() => ({ rows: [{ count: 0 }] }));
     const visitorCount = await pool.query("SELECT COUNT(*) FROM visitor_logs").catch(() => ({ rows: [{ count: 0 }] }));
 
     const stats = {
@@ -33,6 +35,8 @@ exports.getStats = async (req, res) => {
       totalValue: parseFloat(totalValue.rows[0]?.sum || 0),
       totalOrders: parseInt(orderCount.rows[0]?.count || 0),
       grossTurnover: parseFloat(totalTransactions.rows[0]?.sum || 0),
+      commissionEarned: parseFloat(commissionEarned.rows[0]?.sum || 0),
+      pendingPayouts: parseFloat(pendingPayouts.rows[0]?.sum || 0),
       totalVisitors: parseInt(visitorCount.rows[0]?.count || 0),
       totalBids: parseInt(bidCount.rows[0]?.count || 0),
       highestBid: parseFloat(highestBid.rows[0]?.max || 0),
@@ -584,7 +588,103 @@ exports.getChatHistory = async (req, res) => {
   }
 };
 
-// Report Management Delegation
+// Reports management delegation
 const reportController = require('./reportController');
 exports.getReports = reportController.getReports;
 exports.resolveReport = reportController.resolveReport;
+
+// Financials and Escrow
+exports.getEscrowDeals = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT d.*, p.title as product_title, 
+             u_buyer.name as buyer_name, u_seller.name as seller_name,
+             u_seller.payment_methods as seller_payment_info
+      FROM product_deals d
+      JOIN products p ON d.product_id = p.id
+      JOIN users u_buyer ON d.buyer_id = u_buyer.id
+      JOIN users u_seller ON d.seller_id = u_seller.id
+      WHERE d.status = 'CONFIRMED'
+      ORDER BY d.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.releasePayout = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminId = req.user.id;
+
+    const dealCheck = await pool.query("SELECT * FROM product_deals WHERE id = $1", [id]);
+    if (dealCheck.rows.length === 0) return res.status(404).json({ message: "Deal not found" });
+
+    const deal = dealCheck.rows[0];
+    if (deal.status !== 'CONFIRMED') {
+      return res.status(400).json({ message: "Payout can only be released for CONFIRMED deals" });
+    }
+
+    if (deal.payout_status === 'RELEASED') {
+      return res.status(400).json({ message: "Payout already released" });
+    }
+
+    const result = await pool.query(
+      `UPDATE product_deals 
+       SET payout_status = 'RELEASED', 
+           payout_released_at = CURRENT_TIMESTAMP, 
+           payout_released_by = $1, 
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2 
+       RETURNING *`,
+      [adminId, id]
+    );
+
+    // Notify Seller
+    try {
+      const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+      await notificationService.createNotification({
+        user_id: deal.seller_id,
+        title: "Payout Released! 🏦",
+        message: `Your payout for "${productRes.rows[0]?.title || 'Watch'}" has been released to your registered payment method.`,
+        type: 'success',
+        link: '/profile?tab=selling'
+      });
+    } catch (err) { console.error("Payout notification failed:", err.message); }
+
+    await logAdminAction(adminId, 'release_payout', 'deal', id, { amount: deal.seller_payout }, req.ip);
+
+    res.json({ message: 'Payout released successfully', deal: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getFinancials = async (req, res) => {
+  try {
+    const stats = await pool.query(`
+      SELECT 
+        SUM(amount) as gmv,
+        SUM(commission_amount) as total_commission,
+        SUM(platform_gst_amount) as total_platform_gst,
+        SUM(total_platform_fee) as total_revenue,
+        COUNT(*) as total_deals
+      FROM product_deals 
+      WHERE status = 'CONFIRMED'
+    `);
+
+    const pending = await pool.query(`
+      SELECT SUM(seller_payout) as pending_payouts 
+      FROM product_deals 
+      WHERE status = 'CONFIRMED' AND payout_status = 'PENDING'
+    `);
+
+    res.json({
+      ...stats.rows[0],
+      pending_payouts: pending.rows[0]?.pending_payouts || 0
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

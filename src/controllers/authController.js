@@ -6,7 +6,7 @@ const sendEmail = require("../utils/email");
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, phone, city, state, pincode } = req.body;
+    const { name, email, password, phone, city, state, pincode, seller_type, gst_number } = req.body;
 
     if (!name || !email || !password || !phone || !city || !state || !pincode) {
        return res.status(400).json({ message: "All fields are required (Name, Email, Password, Phone, City, State, Pincode)" });
@@ -15,8 +15,8 @@ exports.register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      "INSERT INTO users(name,email,password,phone,city,state,pincode) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-      [name, email, hashedPassword, phone, city, state, pincode]
+      "INSERT INTO users(name,email,password,phone,city,state,pincode,seller_type,gst_number) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
+      [name, email, hashedPassword, phone, city, state, pincode, seller_type || 'individual_collector', gst_number || null]
     );
 
     res.json({
@@ -151,7 +151,9 @@ exports.login = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        terms_accepted: user.terms_accepted
+        terms_accepted: user.terms_accepted,
+        seller_type: user.seller_type,
+        gst_number: user.gst_number
       }
     });
 

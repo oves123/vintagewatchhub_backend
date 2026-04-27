@@ -90,25 +90,49 @@ exports.respondToOffer = async (req, res) => {
           [offer.product_id, offer.id]
         );
 
-        // 2. Set expiry (SHIPMENT WINDOW)
-        // Default: 72h, Verified: 48h
-        const userCheck = await pool.query("SELECT is_verified FROM users WHERE id = $1", [offer.seller_id]);
-        const isVerified = userCheck.rows.length > 0 && userCheck.rows[0].is_verified;
+        // 2. Fetch platform settings and seller details for calculations
+        const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('commission_rate', 'gst_rate')");
+        const settings = {};
+        settingsRes.rows.forEach(r => settings[r.key] = r.value);
+        const commissionRate = parseFloat(settings.commission_rate || 5);
+        const gstRate = parseFloat(settings.gst_rate || 18);
+
+        const sellerRes = await pool.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
+        const seller = sellerRes.rows[0];
+
+        // 3. Set expiry (SHIPMENT WINDOW)
+        const isVerified = seller && seller.is_verified;
         const hoursToAdd = isVerified ? 48 : 72;
         
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
         // Use counter_amount if it was a counter-offer being accepted, otherwise use original amount
-        const finalAmount = oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount;
+        const finalAmount = parseFloat(oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount);
+
+        // 4. Calculations
+        const commission_amount = finalAmount * (commissionRate / 100);
+        const platform_gst_amount = commission_amount * (gstRate / 100);
+        const total_platform_fee = commission_amount + platform_gst_amount;
+        const seller_payout = finalAmount - total_platform_fee;
+        const seller_gst_applicable = seller.seller_type === 'business_seller';
+        const seller_gst_number = seller.gst_number;
 
         await pool.query(
-          `INSERT INTO product_deals (product_id, buyer_id, seller_id, offer_id, amount, status, expires_at)
-           VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6)`,
-          [offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, expiresAt]
+          `INSERT INTO product_deals (
+            product_id, buyer_id, seller_id, offer_id, amount, status, expires_at,
+            commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
+            seller_payout, seller_gst_applicable, seller_gst_number
+          )
+           VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6, $7, $8, $9, $10, $11, $12, $13)`,
+          [
+            offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, expiresAt,
+            commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
+            seller_payout, seller_gst_applicable, seller_gst_number
+          ]
         );
 
-        // 3. Update product status to 'under_offer' immediately to lock it (but still visible in search as per new requirement)
+        // 5. Update product status to 'under_offer' immediately to lock it
         await pool.query(
           "UPDATE products SET status = 'under_offer' WHERE id = $1",
           [offer.product_id]

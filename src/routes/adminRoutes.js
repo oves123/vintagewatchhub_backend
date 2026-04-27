@@ -34,4 +34,9 @@ router.patch("/reports/:id", adminMiddleware, adminController.resolveReport);
 router.patch("/deals/:id/resolve", adminMiddleware, adminController.resolveDeal);
 router.get("/chats/:id/messages", adminMiddleware, adminController.getChatHistory);
 
+// Escrow & Financials
+router.get("/escrow", adminMiddleware, adminController.getEscrowDeals);
+router.patch("/deals/:id/release-payout", adminMiddleware, adminController.releasePayout);
+router.get("/financials", adminMiddleware, adminController.getFinancials);
+
 module.exports = router;
