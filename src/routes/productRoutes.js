@@ -6,13 +6,13 @@ const cloudUpload = require("../middleware/cloudUpload");
 
 router.post(
  "/create",
- cloudUpload.array("images", 10),
+ cloudUpload.array("images", 35),
  productController.createProduct
 );
 
 router.put(
  "/update/:id",
- cloudUpload.array("images", 10),
+ cloudUpload.array("images", 35),
  productController.updateProduct
 );
 
