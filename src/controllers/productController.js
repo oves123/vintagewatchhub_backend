@@ -29,8 +29,8 @@ exports.createProduct = async (req, res) => {
     const images = req.files ? req.files.map(f => f.path) : [];
     const hasVideo = req.files && req.files.some(f => f.mimetype && f.mimetype.startsWith('video/'));
 
-    // Listing Options Validation (Max 2 out of 3)
-    const optionsCount = [allow_buy_now, allow_auction, allow_offers].filter(Boolean).length;
+    const isTrue = (v) => v === true || v === 'true';
+    const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;
     if (optionsCount > 2) {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
     }
@@ -69,12 +69,12 @@ exports.createProduct = async (req, res) => {
         finalStatus,
         shipping_fee || 0,
         shipping_type || 'fixed',
-        allow_buy_now || false,
+        isTrue(allow_buy_now),
         buy_it_now_price || null,
-        allow_auction || false,
+        isTrue(allow_auction),
         starting_bid || 0,
         auction_end || null,
-        allow_offers || false
+        isTrue(allow_offers)
       ]
     );
 
@@ -114,7 +114,8 @@ exports.updateProduct = async (req, res) => {
     } = req.body;
 
     // Listing Options Validation (Max 2 out of 3)
-    const optionsCount = [allow_buy_now, allow_auction, allow_offers].filter(Boolean).length;
+    const isTrue = (v) => v === true || v === 'true';
+    const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;
     if (optionsCount > 2) {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
     }
@@ -135,12 +136,12 @@ exports.updateProduct = async (req, res) => {
       status, 
       shipping_fee || 0,
       shipping_type || 'fixed',
-      allow_buy_now || false,
+      isTrue(allow_buy_now),
       buy_it_now_price || null,
-      allow_auction || false,
+      isTrue(allow_auction),
       starting_bid || 0,
       auction_end || null,
-      allow_offers || false,
+      isTrue(allow_offers),
       id
     ];
 
