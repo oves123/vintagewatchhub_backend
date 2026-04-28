@@ -698,3 +698,23 @@ exports.getFinancials = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.getAuctions = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        p.id, p.title, p.price as starting_bid, p.reserve_price, p.current_bid, p.auction_end,
+        u.name as seller_name,
+        (SELECT COUNT(*) FROM bids WHERE product_id = p.id) as bid_count,
+        (SELECT MAX(bid_amount) FROM bids WHERE product_id = p.id) as max_bid
+      FROM products p
+      LEFT JOIN users u ON p.seller_id = u.id
+      WHERE p.allow_auction = true
+      ORDER BY p.auction_end ASC
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

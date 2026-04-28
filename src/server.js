@@ -90,13 +90,10 @@ io.on("connection", (socket) => {
 
     console.log("User connected:", socket.id);
 
-    // socket.on("joinAuction", (productId) => {
-    //     socket.join(`auction_${productId}`);
-    // });
-
-    // socket.on("placeBid", (data) => {
-    //     io.to(`auction_${data.productId}`).emit("newBid", data);
-    // });
+    socket.on("joinAuction", (productId) => {
+        socket.join(`auction_${productId}`);
+        console.log(`User joined auction room: auction_${productId}`);
+    });
 
     socket.on("joinChat", (chatId) => {
         socket.join(`chat_${chatId}`);

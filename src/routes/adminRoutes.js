@@ -23,6 +23,7 @@ router.patch("/settings", adminMiddleware, adminController.updateSetting);
 // New routes
 router.get("/orders", adminMiddleware, adminController.getOrders);
 router.get("/chats", adminMiddleware, adminController.getChats);
+router.get("/auctions", adminMiddleware, adminController.getAuctions);
 router.post("/notify-seller", adminMiddleware, adminController.notifySeller);
 router.post("/products/create", adminMiddleware, upload.array("images", 10), adminController.adminCreateProduct);
 

@@ -23,7 +23,8 @@ exports.createProduct = async (req, res) => {
       allow_auction,
       starting_bid,
       auction_end,
-      allow_offers
+      allow_offers,
+      reserve_price
     } = req.body;
 
     const images = req.files ? req.files.map(f => f.path) : [];
@@ -50,8 +51,8 @@ exports.createProduct = async (req, res) => {
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
        condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
-       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING *`,
       [
         title, 
@@ -74,7 +75,8 @@ exports.createProduct = async (req, res) => {
         isTrue(allow_auction),
         starting_bid || 0,
         auction_end || null,
-        isTrue(allow_offers)
+        isTrue(allow_offers),
+        reserve_price || 0
       ]
     );
 
@@ -110,7 +112,7 @@ exports.updateProduct = async (req, res) => {
       title, description, price, category_id, product_type,
       condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
       shipping_fee, shipping_type,
-      allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers
+      allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price
     } = req.body;
 
     // Listing Options Validation (Max 2 out of 3)
@@ -142,6 +144,7 @@ exports.updateProduct = async (req, res) => {
       starting_bid || 0,
       auction_end || null,
       isTrue(allow_offers),
+      reserve_price || 0,
       id
     ];
 
@@ -158,7 +161,7 @@ exports.updateProduct = async (req, res) => {
         shipping_info = $9, payment_info = $10, status = $11,
         shipping_fee = $12, shipping_type = $13,
         allow_buy_now = $14, buy_it_now_price = $15, allow_auction = $16,
-        starting_bid = $17, auction_end = $18, allow_offers = $19
+        starting_bid = $17, auction_end = $18, allow_offers = $19, reserve_price = $20
         ${imagesUpdateQuery}
       WHERE id = $${queryParams.length} RETURNING *`,
       queryParams
@@ -166,7 +169,7 @@ exports.updateProduct = async (req, res) => {
 
     if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
 
-    res.json({ message: "Product updated", product: result.rows[0] });
+    res.json({ message: "Product updated successfully", product: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

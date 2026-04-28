@@ -152,11 +152,11 @@ exports.getUserDeals = async (req, res) => {
       WHERE status = 'SHIPPED' AND shipped_at < CURRENT_TIMESTAMP - INTERVAL '5 days'
     `);
 
-    // 3. Auto-Confirm Logic (DELIVERED -> CONFIRMED after 7 days as per new requirement)
+    // 3. Auto-Confirm Logic (DELIVERED -> CONFIRMED after 48 hours as per new requirement)
     await pool.query(`
       UPDATE product_deals 
       SET status = 'CONFIRMED', buyer_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE status = 'DELIVERED' AND seller_delivered_at < CURRENT_TIMESTAMP - INTERVAL '7 days'
+      WHERE status = 'DELIVERED' AND seller_delivered_at < CURRENT_TIMESTAMP - INTERVAL '48 hours'
     `);
 
     const result = await pool.query(
