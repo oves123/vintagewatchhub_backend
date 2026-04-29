@@ -118,6 +118,80 @@ exports.getSellerOrders = async (req, res) => {
   // ... existing code (deprecated)
 };
 
+// Direct Buy Now
+exports.buyNowDirect = async (req, res) => {
+  try {
+    const { product_id, buyer_id } = req.body;
+
+    const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [product_id]);
+    if (productRes.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    const product = productRes.rows[0];
+
+    if (!product.allow_buy_now && !product.buy_it_now_price) {
+       return res.status(400).json({ message: "Buy Now is not available for this item" });
+    }
+
+    const amount = product.buy_it_now_price || product.price;
+
+    // Fetch settings and seller
+    const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('commission_rate', 'gst_rate')");
+    const settings = {};
+    settingsRes.rows.forEach(r => settings[r.key] = r.value);
+    const commissionRate = parseFloat(settings.commission_rate || 5);
+    const gstRate = parseFloat(settings.gst_rate || 18);
+
+    const sellerRes = await pool.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
+    const seller = sellerRes.rows[0];
+
+    const isVerified = seller && seller.is_verified;
+    const hoursToAdd = isVerified ? 48 : 72;
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
+
+    const commission_amount = amount * (commissionRate / 100);
+    const platform_gst_amount = commission_amount * (gstRate / 100);
+    const total_platform_fee = commission_amount + platform_gst_amount;
+    const seller_payout = amount - total_platform_fee;
+
+    // Reject all pending offers for this product
+    await pool.query(
+      "UPDATE product_offers SET status = 'rejected' WHERE product_id = $1 AND status = 'pending'",
+      [product_id]
+    );
+
+    const result = await pool.query(
+      `INSERT INTO product_deals (
+        product_id, buyer_id, seller_id, amount, status, expires_at,
+        commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
+        seller_payout, seller_gst_applicable, seller_gst_number, payment_status
+      )
+       VALUES ($1, $2, $3, $4, 'ACCEPTED', $5, $6, $7, $8, $9, $10, $11, $12, 'PENDING') RETURNING *`,
+      [
+        product_id, buyer_id, product.seller_id, amount, expiresAt,
+        commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
+        seller_payout, seller.seller_type === 'business_seller', seller.gst_number
+      ]
+    );
+
+    await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+
+    res.json({ message: "Deal secured successfully. Please complete the payment.", deal: result.rows[0] });
+
+    try {
+      await notificationService.createNotification({
+        user_id: product.seller_id,
+        title: "Item Sold! 🚀",
+        message: `Your item "${product.title}" has been purchased. Waiting for buyer's payment.`,
+        type: 'success',
+        link: '/profile?tab=selling'
+      });
+    } catch (err) { console.error("Notification error:", err); }
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getUserDeals = async (req, res) => {
   try {
     const { user_id } = req.params;
@@ -235,13 +309,19 @@ exports.markShipped = async (req, res) => {
       return res.status(400).json({ message: 'Invalid tracking number. Must be between 8 and 25 characters.' });
     }
 
+    const packing_video = req.file ? req.file.path : null;
+
+    if (!packing_video) {
+       return res.status(400).json({ message: "Packing video is mandatory." });
+    }
+
     // Update deal status to 'SHIPPED' or update details if already SHIPPED
     await pool.query(
       `UPDATE product_deals 
-       SET status = 'SHIPPED', tracking_number = $1, courier_name = $2, 
+       SET status = 'SHIPPED', tracking_number = $1, courier_name = $2, packing_video = $3,
            shipped_at = COALESCE(shipped_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3`,
-      [tracking_number || null, courier_name || 'Hand Delivery', id]
+       WHERE id = $4`,
+      [tracking_number || null, courier_name || 'Hand Delivery', packing_video, id]
     );
 
     // Update product status to 'sold' on the marketplace (removes from search)

@@ -5,7 +5,7 @@ exports.getUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
-      "SELECT id, name, email, phone, bio, profile_image, city, state, pincode, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date FROM users WHERE id = $1",
+      "SELECT id, name, email, phone, bio, profile_image, address, city, state, pincode, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date FROM users WHERE id = $1",
       [id]
     );
 
@@ -23,7 +23,7 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, phone, bio, preferences, payment_methods, city, state, pincode } = req.body;
+    const { name, phone, bio, preferences, payment_methods, address, city, state, pincode } = req.body;
 
     const result = await pool.query(
       `UPDATE users 
@@ -32,17 +32,19 @@ exports.updateUserProfile = async (req, res) => {
            bio = COALESCE($3, bio), 
            preferences = COALESCE($4, preferences),
            payment_methods = COALESCE($5, payment_methods),
-           city = COALESCE($6, city),
-           state = COALESCE($7, state),
-           pincode = COALESCE($8, pincode)
-       WHERE id = $9
-       RETURNING id, name, email, phone, bio, profile_image, preferences, payment_methods, city, state, pincode`,
+           address = COALESCE($6, address),
+           city = COALESCE($7, city),
+           state = COALESCE($8, state),
+           pincode = COALESCE($9, pincode)
+       WHERE id = $10
+       RETURNING id, name, email, phone, bio, profile_image, preferences, payment_methods, address, city, state, pincode`,
       [
         name, 
         phone, 
         bio, 
         preferences ? JSON.stringify(preferences) : null, 
         payment_methods ? JSON.stringify(payment_methods) : null,
+        address,
         city,
         state,
         pincode,

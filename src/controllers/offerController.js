@@ -20,15 +20,15 @@ exports.createOffer = async (req, res) => {
     //   return res.status(400).json({ message: "This product does not accept offers" });
     // }
 
-    // 2. Check offer limit (5 per product/buyer) - TEMPORARILY DISABLED FOR TESTING
+    // 2. Check offer limit (5 per product/buyer)
     const limitCheck = await pool.query(
       "SELECT COUNT(*) FROM product_offers WHERE product_id = $1 AND buyer_id = $2",
       [product_id, buyer_id]
     );
 
-    // if (parseInt(limitCheck.rows[0].count) >= 5) {
-    //   return res.status(400).json({ message: "You have reached the limit of 5 offers for this item" });
-    // }
+    if (parseInt(limitCheck.rows[0].count) >= 5) {
+      return res.status(400).json({ message: "You have reached the limit of 5 offers for this item." });
+    }
 
     // 3. Create offer with 48h expiry
     const newOfferCount = parseInt(limitCheck.rows[0].count) + 1;
@@ -122,9 +122,9 @@ exports.respondToOffer = async (req, res) => {
           `INSERT INTO product_deals (
             product_id, buyer_id, seller_id, offer_id, amount, status, expires_at,
             commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number
+            seller_payout, seller_gst_applicable, seller_gst_number, payment_status
           )
-           VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6, $7, $8, $9, $10, $11, $12, $13)`,
+           VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6, $7, $8, $9, $10, $11, $12, $13, 'PENDING')`,
           [
             offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, expiresAt,
             commissionRate, commission_amount, platform_gst_amount, total_platform_fee,

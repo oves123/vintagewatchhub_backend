@@ -8,8 +8,8 @@ exports.register = async (req, res) => {
   try {
     const { name, email, password, phone, city, state, pincode, seller_type, gst_number } = req.body;
 
-    if (!name || !email || !password || !phone || !city || !state || !pincode) {
-       return res.status(400).json({ message: "All fields are required (Name, Email, Password, Phone, City, State, Pincode)" });
+    if (!name || !email || !password) {
+       return res.status(400).json({ message: "Name, Email, and Password are required" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
