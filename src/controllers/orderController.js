@@ -131,8 +131,9 @@ exports.buyNowDirect = async (req, res) => {
        return res.status(400).json({ message: "Buy Now is not available for this item" });
     }
 
-    const amount = product.buy_it_now_price || product.price;
-
+    const productPrice = parseFloat(product.buy_it_now_price || product.price);
+    const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
+    
     // Fetch settings and seller
     const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('commission_rate', 'gst_rate')");
     const settings = {};
@@ -148,10 +149,10 @@ exports.buyNowDirect = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
-    const commission_amount = amount * (commissionRate / 100);
+    const commission_amount = productPrice * (commissionRate / 100);
     const platform_gst_amount = commission_amount * (gstRate / 100);
     const total_platform_fee = commission_amount + platform_gst_amount;
-    const seller_payout = amount - total_platform_fee;
+    const seller_payout = (productPrice - total_platform_fee) + shippingFee;
 
     // Reject all pending offers for this product
     await pool.query(
@@ -161,13 +162,13 @@ exports.buyNowDirect = async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO product_deals (
-        product_id, buyer_id, seller_id, amount, status, expires_at,
+        product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
         commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
         seller_payout, seller_gst_applicable, seller_gst_number, payment_status
       )
-       VALUES ($1, $2, $3, $4, 'ACCEPTED', $5, $6, $7, $8, $9, $10, $11, $12, 'PENDING') RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING') RETURNING *`,
       [
-        product_id, buyer_id, product.seller_id, amount, expiresAt,
+        product_id, buyer_id, product.seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
         commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
         seller_payout, seller.seller_type === 'business_seller', seller.gst_number
       ]

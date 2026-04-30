@@ -90,6 +90,9 @@ exports.respondToOffer = async (req, res) => {
           [offer.product_id, offer.id]
         );
 
+        const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [offer.product_id]);
+        const product = productRes.rows[0];
+
         // 2. Fetch platform settings and seller details for calculations
         const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('commission_rate', 'gst_rate')");
         const settings = {};
@@ -109,24 +112,25 @@ exports.respondToOffer = async (req, res) => {
 
         // Use counter_amount if it was a counter-offer being accepted, otherwise use original amount
         const finalAmount = parseFloat(oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount);
+        const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
 
         // 4. Calculations
         const commission_amount = finalAmount * (commissionRate / 100);
         const platform_gst_amount = commission_amount * (gstRate / 100);
         const total_platform_fee = commission_amount + platform_gst_amount;
-        const seller_payout = finalAmount - total_platform_fee;
+        const seller_payout = (finalAmount - total_platform_fee) + shippingFee;
         const seller_gst_applicable = seller.seller_type === 'business_seller';
         const seller_gst_number = seller.gst_number;
 
         await pool.query(
           `INSERT INTO product_deals (
-            product_id, buyer_id, seller_id, offer_id, amount, status, expires_at,
+            product_id, buyer_id, seller_id, offer_id, amount, shipping_fee, shipping_type, status, expires_at,
             commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
             seller_payout, seller_gst_applicable, seller_gst_number, payment_status
           )
-           VALUES ($1, $2, $3, $4, $5, 'ACCEPTED', $6, $7, $8, $9, $10, $11, $12, $13, 'PENDING')`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING')`,
           [
-            offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, expiresAt,
+            offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, shippingFee, product.shipping_type, expiresAt,
             commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
             seller_payout, seller_gst_applicable, seller_gst_number
           ]
