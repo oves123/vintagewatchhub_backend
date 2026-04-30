@@ -89,29 +89,22 @@ exports.sendMessage = async (req, res) => {
   try {
     const { chat_id, sender_id, message, type = 'text', metadata = {} } = req.body;
 
-    // Harden Regex for Contact Info Blocking (Ruthless mode)
-    const phoneRegex = /(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{3}\)?[\s-]?)?\d{3}[\s-]?\d{4}/;
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-    const spacedPhoneRegex = /(\d\s*){10,12}/; // Detects "9 8 7 6 5 4 3 2 1 0"
-    const socialKeywords = /\b(whatsapp|insta|telegram|t\.me|wa\.me|instagram|facebook|fb\.com|insta:)\b/i;
-    const numberWordsRegex = /\b(zero|one|two|three|four|five|six|seven|eight|nine)\s+(zero|one|two|three|four|five|six|seven|eight|nine)\b/i; // Detects "nine eight"
-
-    // Whitelist for tracking numbers (to avoid false positives)
-    const trackingWhitelistRegex = /\b(AWB|TRACKING|ID|UPS|DHL|FEDEX|1Z|RR|CP)\s*[:#]?\s*[A-Z0-9]{8,25}\b/i;
+    const safetyService = require("../services/safetyService");
 
     if (type === 'text' && message) {
-      // If it looks like a tracking number, skip the PII block
-      if (trackingWhitelistRegex.test(message)) {
-        // Allow tracking numbers to pass through
-      } else if (
-        phoneRegex.test(message) || 
-        emailRegex.test(message) ||
-        (message.replace(/\s/g, '').length >= 10 && spacedPhoneRegex.test(message)) ||
-        socialKeywords.test(message) ||
-        numberWordsRegex.test(message)
-      ) {
+      if (safetyService.isUnsafeText(message)) {
         return res.status(400).json({ 
-          error: "Safety Alert: Sharing phone numbers, emails, or social platform links is not permitted. Please keep all communication within the platform for your security." 
+          error: "Safety Alert: Sharing personal contact or location details is restricted. To ensure your funds are protected by our 48h Inspection Escrow, please keep all communication and transactions within the platform." 
+        });
+      }
+    }
+
+    if (type === 'image' && message) {
+      // If it's an image, perform OCR check
+      const safetyResult = await safetyService.isUnsafeImage(message);
+      if (!safetyResult.safe) {
+        return res.status(400).json({ 
+          error: "Safety Alert: This image contains restricted contact information. For your security, all evidence and deals must be processed through the platform to guarantee payment protection." 
         });
       }
     }
