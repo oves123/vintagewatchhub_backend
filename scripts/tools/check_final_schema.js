@@ -1,5 +1,5 @@
-require("dotenv").config();
-const pool = require("./src/config/db");
+require("dotenv").config({ path: "backend/.env" });
+const pool = require("../../src/config/db");
 
 async function checkSchema() {
   try {

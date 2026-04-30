@@ -86,8 +86,8 @@ exports.getUserReviews = async (req, res) => {
       `SELECT r.*, u.name as seller_name, p.title as product_title
        FROM reviews r
        JOIN users u ON r.seller_id = u.id
-       LEFT JOIN orders o ON r.order_id = o.id
-       LEFT JOIN products p ON o.product_id = p.id
+       LEFT JOIN product_deals d ON r.order_id = d.id
+       LEFT JOIN products p ON d.product_id = p.id
        WHERE r.user_id = $1
        ORDER BY r.created_at DESC`,
       [userId]
