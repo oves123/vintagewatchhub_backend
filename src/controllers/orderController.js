@@ -444,28 +444,81 @@ exports.cancelDeal = async (req, res) => {
     const { id } = req.params;
     const { user_id, reason } = req.body;
 
-    // Verify ownership and ensure it's still in ACCEPTED state and NOT SHIPPED
+    // Verify ownership and ensure it's still in a cancellable state
+    // Cancellable states: 
+    // 1. ACCEPTED (Pre-payment)
+    // 2. PAID but expired (Seller failed to ship within 48-72h)
     const dealCheck = await pool.query(
-      'SELECT * FROM product_deals WHERE id = $1 AND (seller_id = $2 OR buyer_id = $2) AND status = \'ACCEPTED\' AND shipped_at IS NULL',
+      `SELECT * FROM product_deals 
+       WHERE id = $1 AND (seller_id = $2 OR buyer_id = $2) 
+       AND (
+         status = 'ACCEPTED' 
+         OR (status = 'PAID' AND expires_at < CURRENT_TIMESTAMP)
+       )
+       AND shipped_at IS NULL`,
       [id, user_id]
     );
-    if (dealCheck.rows.length === 0) return res.status(403).json({ message: 'Cancellation blocked: Order may have already been shipped, disputed, or cancelled.' });
+
+    if (dealCheck.rows.length === 0) {
+      return res.status(403).json({ 
+        message: 'Cancellation blocked: Order may have already been shipped, or the shipping deadline has not yet passed for this paid order.' 
+      });
+    }
 
     const deal = dealCheck.rows[0];
+    const isPaid = deal.status === 'PAID';
+    const newStatus = isPaid ? 'REFUND_PENDING' : 'CANCELLED';
 
-    // Mark deal as cancelled
+    // Mark deal as cancelled or refund pending
     await pool.query(
-      "UPDATE product_deals SET status = 'CANCELLED', cancel_reason = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-      [reason, id]
+      "UPDATE product_deals SET status = $1, cancel_reason = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+      [newStatus, reason, id]
     );
 
-    // Reset product to approved
-    await pool.query(
-      "UPDATE products SET status = 'approved' WHERE id = $1",
-      [deal.product_id]
-    );
+    // If it wasn't paid, we can immediately reactivate the product
+    if (!isPaid) {
+      await pool.query(
+        "UPDATE products SET status = 'approved' WHERE id = $1",
+        [deal.product_id]
+      );
+    }
 
-    res.json({ message: 'Deal cancelled successfully.' });
+    // Notifications
+    try {
+      const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+      const productTitle = productRes.rows[0]?.title || 'Watch';
+      const otherPartyId = (user_id == deal.buyer_id) ? deal.seller_id : deal.buyer_id;
+
+      // Notify the other party
+      await notificationService.createNotification({
+        user_id: otherPartyId,
+        title: isPaid ? "Order Cancellation & Refund Request ⚠️" : "Order Cancelled 🛑",
+        message: `The deal for "${productTitle}" has been cancelled by the ${user_id == deal.buyer_id ? 'buyer' : 'seller'}. ${isPaid ? 'A refund is now pending admin review.' : ''}`,
+        type: 'warning',
+        link: (user_id == deal.buyer_id) ? '/profile?tab=selling' : '/profile?tab=buying'
+      });
+
+      // If PAID, notify Admins to process refund
+      if (isPaid) {
+        const adminIds = await notificationService.getAdminIds();
+        for (const adminId of adminIds) {
+          await notificationService.createNotification({
+            user_id: adminId,
+            title: "Action Required: Refund Pending",
+            message: `A paid order (#${id}) for "${productTitle}" was cancelled. Please process the refund.`,
+            type: 'error',
+            link: '/admin?tab=orders'
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Cancellation notification error:", err.message);
+    }
+
+    res.json({ 
+      message: isPaid ? 'Order cancelled. Refund request has been sent to Admin.' : 'Deal cancelled successfully.',
+      status: newStatus
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
