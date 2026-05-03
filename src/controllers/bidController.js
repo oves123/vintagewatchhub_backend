@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const notificationService = require("../services/notificationService");
 
 // Place a new bid
 exports.placeBid = async (req, res) => {
@@ -9,7 +10,7 @@ exports.placeBid = async (req, res) => {
 
     // 1. Check if product allows auctions
     const productCheck = await client.query(
-      "SELECT id, allow_auction, starting_bid, auction_end, status, reserve_price, current_bid FROM products WHERE id = $1 FOR UPDATE",
+      "SELECT id, allow_auction, starting_bid, auction_end, status, reserve_price, current_bid, seller_id, title FROM products WHERE id = $1 FOR UPDATE",
       [product_id]
     );
 
@@ -49,6 +50,9 @@ exports.placeBid = async (req, res) => {
     );
 
     // 4. Update current_bid in products
+    let updateQuery = "UPDATE products SET current_bid = $1";
+    let queryParams = [bid_amount, product_id];
+
     // 5. Dynamic Extension (Anti-Sniping)
     let isExtended = false;
     const timeRemaining = new Date(product.auction_end) - new Date();
@@ -63,6 +67,17 @@ exports.placeBid = async (req, res) => {
     updateQuery += " WHERE id = $2";
     await client.query(updateQuery, queryParams);
 
+    // Fetch bidder info for socket emit with stats
+    const bidderRes = await client.query(
+      `SELECT name, profile_image, rating,
+       (SELECT COUNT(*) FROM product_deals WHERE seller_id = $1 AND status = 'CONFIRMED') as total_sold,
+       (SELECT COUNT(*) FROM product_deals WHERE buyer_id = $1 AND status = 'CONFIRMED') as total_bought,
+       (SELECT COUNT(*) FROM reviews WHERE seller_id = $1) as review_count
+       FROM users WHERE id = $1`,
+      [user_id]
+    );
+    const bidder = bidderRes.rows[0];
+
     await client.query('COMMIT');
 
     // Emit socket event for real-time updates
@@ -71,11 +86,27 @@ exports.placeBid = async (req, res) => {
       io.to(`auction_${product_id}`).emit("newBid", {
         product_id,
         bid_amount: bid_amount,
-        user_name: user_id, // For simplicity now, but you might want to fetch the name
+        user_name: bidder.name,
+        profile_image: bidder.profile_image,
+        rating: bidder.rating,
+        total_sold: bidder.total_sold,
+        total_bought: bidder.total_bought,
+        review_count: bidder.review_count,
         auction_end: queryParams.length > 2 ? queryParams[2] : product.auction_end,
         isExtended
       });
     }
+
+    // 6. Notify Seller
+    try {
+      await notificationService.createNotification({
+        user_id: product.seller_id,
+        title: "New Bid Received! 🔨",
+        message: `A new bid of ₹${parseFloat(bid_amount).toLocaleString()} has been placed on your item "${product.title || 'Watch'}".`,
+        type: 'info',
+        link: `/products/${product_id}`
+      });
+    } catch (err) { console.error("Bid notification failed:", err.message); }
 
     res.json({
       message: isExtended ? "Bid placed and auction extended!" : "Bid placed successfully",
@@ -97,11 +128,18 @@ exports.getBidHistory = async (req, res) => {
   try {
     const { productId } = req.params;
     const result = await pool.query(
-      `SELECT bids.*, users.name as user_name 
-       FROM bids 
-       JOIN users ON bids.user_id = users.id 
-       WHERE product_id = $1 
-       ORDER BY bid_amount DESC`,
+      `SELECT 
+          b.*, 
+          u.name as user_name, 
+          u.profile_image, 
+          u.rating,
+          (SELECT COUNT(*) FROM product_deals WHERE seller_id = u.id AND status = 'CONFIRMED') as total_sold,
+          (SELECT COUNT(*) FROM product_deals WHERE buyer_id = u.id AND status = 'CONFIRMED') as total_bought,
+          (SELECT COUNT(*) FROM reviews WHERE seller_id = u.id) as review_count
+       FROM bids b
+       JOIN users u ON b.user_id = u.id 
+       WHERE b.product_id = $1 
+       ORDER BY b.bid_amount DESC`,
       [productId]
     );
     res.json(result.rows);

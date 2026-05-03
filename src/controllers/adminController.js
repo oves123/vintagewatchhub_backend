@@ -718,3 +718,23 @@ exports.getAuctions = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.getBids = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        b.*, 
+        p.title as product_title, 
+        u.name as bidder_name, u.email as bidder_email
+      FROM bids b
+      JOIN products p ON b.product_id = p.id
+      JOIN users u ON b.user_id = u.id
+      ORDER BY b.created_at DESC
+      LIMIT 200
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
