@@ -24,11 +24,42 @@ exports.createProduct = async (req, res) => {
       starting_bid,
       auction_end,
       allow_offers,
-      reserve_price
+      reserve_price,
+      video_settings,
+      media_order
     } = req.body;
 
-    const images = req.files ? req.files.map(f => f.path) : [];
-    const hasVideo = req.files && req.files.some(f => f.mimetype && f.mimetype.startsWith('video/'));
+    let mappedVideoSettings = {};
+    try {
+      mappedVideoSettings = typeof video_settings === 'string' ? JSON.parse(video_settings) : (video_settings || {});
+    } catch (e) {
+      mappedVideoSettings = {};
+    }
+
+    const fileMap = {};
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(f => {
+        const normalizedPath = f.path.replace(/\\/g, '/');
+        fileMap[f.originalname] = normalizedPath;
+        if (mappedVideoSettings[f.originalname]) {
+          mappedVideoSettings[normalizedPath] = mappedVideoSettings[f.originalname];
+          delete mappedVideoSettings[f.originalname];
+        }
+      });
+    }
+
+    let images = [];
+    if (media_order) {
+      try {
+        const orderArr = typeof media_order === 'string' ? JSON.parse(media_order) : media_order;
+        images = orderArr.map(item => fileMap[item] || item);
+      } catch (e) {
+        images = Object.values(fileMap);
+      }
+    } else {
+      images = Object.values(fileMap);
+    }
+    const hasVideo = images.some(img => img.match(/\.(mp4|mov|webm|quicktime|avi|mkv)$/i));
 
     const isTrue = (v) => v === true || v === 'true';
     const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;
@@ -51,8 +82,8 @@ exports.createProduct = async (req, res) => {
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
        condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
-       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
       RETURNING *`,
       [
         title, 
@@ -76,7 +107,8 @@ exports.createProduct = async (req, res) => {
         starting_bid || 0,
         auction_end || null,
         isTrue(allow_offers),
-        reserve_price || 0
+        reserve_price || 0,
+        JSON.stringify(mappedVideoSettings)
       ]
     );
 
@@ -112,7 +144,8 @@ exports.updateProduct = async (req, res) => {
       title, description, price, category_id, product_type,
       condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
       shipping_fee, shipping_type,
-      allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price
+      allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price,
+      existing_images, video_settings, media_order
     } = req.body;
 
     // Listing Options Validation (Max 2 out of 3)
@@ -122,8 +155,54 @@ exports.updateProduct = async (req, res) => {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
     }
 
-    // Handle new images if any
-    let imagesUpdateQuery = "";
+    // Status logic: If already approved, keep it approved unless explicitly changed
+    let finalStatus = status;
+    const currentProduct = await pool.query("SELECT status FROM products WHERE id = $1", [id]);
+    if (currentProduct.rows.length > 0 && currentProduct.rows[0].status === 'approved' && status === 'pending') {
+      finalStatus = 'approved';
+    }
+
+    // Media Logic: Merge existing images with new uploads
+    let finalImages = [];
+    if (existing_images) {
+      try {
+        finalImages = typeof existing_images === 'string' ? JSON.parse(existing_images) : existing_images;
+      } catch (e) {
+        finalImages = [];
+      }
+    }
+
+    let mappedVideoSettings = {};
+    try {
+      mappedVideoSettings = typeof video_settings === 'string' ? JSON.parse(video_settings) : (video_settings || {});
+    } catch (e) {
+      mappedVideoSettings = {};
+    }
+
+    const fileMap = {};
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(f => {
+        const normalizedPath = f.path.replace(/\\/g, '/');
+        fileMap[f.originalname] = normalizedPath;
+        // If settings were sent using the original filename, map them to the new path
+        if (mappedVideoSettings[f.originalname]) {
+          mappedVideoSettings[normalizedPath] = mappedVideoSettings[f.originalname];
+          delete mappedVideoSettings[f.originalname];
+        }
+      });
+    }
+
+    if (media_order) {
+      try {
+        const orderArr = typeof media_order === 'string' ? JSON.parse(media_order) : media_order;
+        finalImages = orderArr.map(item => fileMap[item] || item);
+      } catch (e) {
+        finalImages = [...finalImages, ...Object.values(fileMap)];
+      }
+    } else {
+      finalImages = [...finalImages, ...Object.values(fileMap)];
+    }
+
     let queryParams = [
       title, 
       description, 
@@ -135,7 +214,7 @@ exports.updateProduct = async (req, res) => {
       typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {}),
       typeof shipping_info === 'string' ? shipping_info : JSON.stringify(shipping_info || {}),
       typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
-      status, 
+      finalStatus, 
       shipping_fee || 0,
       shipping_type || 'fixed',
       isTrue(allow_buy_now),
@@ -145,14 +224,13 @@ exports.updateProduct = async (req, res) => {
       auction_end || null,
       isTrue(allow_offers),
       reserve_price || 0,
-      id
+      JSON.stringify(finalImages),
+      JSON.stringify(mappedVideoSettings)
     ];
 
-    if (req.files && req.files.length > 0) {
-      const newImages = req.files.map(f => f.path);
-      imagesUpdateQuery = ", images = $15";
-      queryParams.push(JSON.stringify(newImages));
-    }
+    // Add ID as the last parameter
+    queryParams.push(id);
+    const idParamIndex = queryParams.length;
 
     const result = await pool.query(
       `UPDATE products SET 
@@ -161,9 +239,9 @@ exports.updateProduct = async (req, res) => {
         shipping_info = $9, payment_info = $10, status = $11,
         shipping_fee = $12, shipping_type = $13,
         allow_buy_now = $14, buy_it_now_price = $15, allow_auction = $16,
-        starting_bid = $17, auction_end = $18, allow_offers = $19, reserve_price = $20
-        ${imagesUpdateQuery}
-      WHERE id = $${queryParams.length} RETURNING *`,
+        starting_bid = $17, auction_end = $18, allow_offers = $19, reserve_price = $20,
+        images = $21, video_settings = $22
+      WHERE id = $${idParamIndex} RETURNING *`,
       queryParams
     );
 
