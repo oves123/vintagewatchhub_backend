@@ -96,7 +96,8 @@ exports.createAuctionWinnerOrder = async (req, res) => {
         title: "You Won the Auction! 🏆",
         message: `Congratulations! You won the auction for "${product.title}". Please complete the payment within ${hoursToAdd} hours.`,
         type: 'success',
-        link: '/profile?tab=buying'
+        link: '/profile?tab=buying',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
 
       await notificationService.createNotification({
@@ -104,7 +105,8 @@ exports.createAuctionWinnerOrder = async (req, res) => {
         title: "Auction Ended - Item Sold! 🔨",
         message: `Your auction for "${product.title}" has ended with a winning bid of ₹${productPrice.toLocaleString()}. Waiting for payment.`,
         type: 'success',
-        link: '/profile?tab=selling'
+        link: '/profile?tab=selling',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } catch (err) { console.error("Auction winner notification failed:", err.message); }
 
@@ -213,7 +215,8 @@ exports.createOrder = async (req, res) => {
         title: "New Order Received! 🕰️",
         message: `You have a new order for "${product.title}". Waiting for buyer payment.`,
         type: 'success',
-        link: '/profile?tab=selling'
+        link: '/profile?tab=selling',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } catch (err) { console.error("Order notification failed:", err.message); }
   } catch (error) {
@@ -305,7 +308,8 @@ exports.buyNowDirect = async (req, res) => {
         title: "Item Sold! 🚀",
         message: `Your item "${product.title}" has been purchased. Waiting for buyer's payment.`,
         type: 'success',
-        link: '/profile?tab=selling'
+        link: '/profile?tab=selling',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } catch (err) { console.error("Notification error:", err); }
 
@@ -465,7 +469,8 @@ exports.markShipped = async (req, res) => {
         title: "Item Shipped! 📦",
         message: `Your item "${productRes.rows[0]?.title || 'Watch'}" is on its way. Tracking: ${tracking_number || 'N/A'}`,
         type: 'info',
-        link: '/profile?tab=buying'
+        link: '/profile?tab=buying',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } catch (err) { console.error("Ship notification failed:", err.message); }
   } catch (error) {
@@ -555,7 +560,8 @@ exports.confirmSale = async (req, res) => {
         title: "Sale Finalized! 💰",
         message: `The buyer has confirmed the sale for "${productRes.rows[0]?.title || 'Watch'}". Payout is being processed.`,
         type: 'success',
-        link: '/profile?tab=selling'
+        link: '/profile?tab=selling',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } catch (err) { console.error("Finalize notification failed:", err.message); }
   } catch (error) {

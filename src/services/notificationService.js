@@ -1,4 +1,7 @@
 const pool = require("../config/db");
+const emailService = require("./emailService");
+const smsService = require("./smsService");
+const whatsappService = require("./whatsappService");
 
 /**
  * Create a new in-app notification for a user.
@@ -8,22 +11,52 @@ const pool = require("../config/db");
  * @param {string} data.message - alert message
  * @param {string} [data.type='info'] - success, info, warning, error
  * @param {string} [data.link] - internal link to redirect (e.g., /admin/products)
+ * @param {Array<string>} [data.channels=['in_app']] - e.g., ['in_app', 'email', 'sms', 'whatsapp']
  */
-exports.createNotification = async ({ user_id, title, message, type = 'info', link = null }) => {
+exports.createNotification = async ({ user_id, title, message, type = 'info', link = null, channels = ['in_app'] }) => {
   try {
     if (!user_id) return;
     
-    const result = await pool.query(
-      "INSERT INTO notifications (user_id, title, message, type, link) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [user_id, title, message, type, link]
-    );
+    if (channels.includes('in_app')) {
+      const result = await pool.query(
+        "INSERT INTO notifications (user_id, title, message, type, link) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        [user_id, title, message, type, link]
+      );
 
-    // Notify via Socket if possible
-    // Note: We need to get IO from the app instance. 
-    // Usually it's better to pass it or use a global emitter.
-    // For now, we'll try to use a global emitter if set up.
-    if (global.io) {
-      global.io.to(`user_${user_id}`).emit("newNotification", result.rows[0]);
+      if (global.io) {
+        global.io.to(`user_${user_id}`).emit("newNotification", result.rows[0]);
+      }
+    }
+
+    // Handle External Channels if requested
+    if (channels.includes('email') || channels.includes('sms') || channels.includes('whatsapp')) {
+      const userRes = await pool.query("SELECT email, phone FROM users WHERE id = $1", [user_id]);
+      const user = userRes.rows[0];
+
+      if (user) {
+        if (channels.includes('email') && user.email) {
+          // Fire and forget so we don't block
+          emailService.sendEmail({
+            to: user.email,
+            subject: title,
+            html: `<h3>${title}</h3><p>${message}</p><p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}${link || ''}">View Details</a></p>`
+          }).catch(console.error);
+        }
+
+        if (channels.includes('sms') && user.phone) {
+          smsService.sendSMS({
+            to: user.phone,
+            body: `Vintage Marketplace: ${title}\n${message}`
+          }).catch(console.error);
+        }
+
+        if (channels.includes('whatsapp') && user.phone) {
+          whatsappService.sendWhatsApp({
+            to: user.phone,
+            body: `*Vintage Marketplace*\n*${title}*\n\n${message}`
+          }).catch(console.error);
+        }
+      }
     }
 
     return true;

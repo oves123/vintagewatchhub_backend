@@ -769,7 +769,8 @@ exports.verifyPayment = async (req, res) => {
         title: "Payment Verified! 💸",
         message: `The payment for "${productTitle}" has been verified by Admin. You can now ship the item.`,
         type: 'success',
-        link: '/profile?tab=selling'
+        link: '/profile?tab=selling',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
       // Notify Buyer
       await notificationService.createNotification({
@@ -777,7 +778,8 @@ exports.verifyPayment = async (req, res) => {
         title: "Payment Confirmed! ✅",
         message: `Your payment for "${productTitle}" has been verified. The seller will ship your item soon.`,
         type: 'success',
-        link: '/profile?tab=buying'
+        link: '/profile?tab=buying',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
     } else {
       // REJECTED - Notify Buyer
@@ -786,7 +788,8 @@ exports.verifyPayment = async (req, res) => {
         title: "Payment Rejected ❌",
         message: `Your payment for "${productTitle}" was rejected. Please contact support or re-upload the receipt.`,
         type: 'error',
-        link: '/profile?tab=buying'
+        link: '/profile?tab=buying',
+        channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
       
       // We already reset status to 'ACCEPTED' and payment_status to 'ACCEPTED' in the UPDATE query if it was rejected.
