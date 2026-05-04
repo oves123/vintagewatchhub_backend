@@ -5,7 +5,7 @@ exports.getUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
-      "SELECT id, name, email, phone, bio, profile_image, address, city, state, pincode, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date FROM users WHERE id = $1",
+      "SELECT id, name, email, phone, bio, profile_image, address, city, state, pincode, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date, seller_type, gst_number, pan_number, gst_enrolment_id FROM users WHERE id = $1",
       [id]
     );
 
@@ -23,7 +23,7 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, phone, bio, preferences, payment_methods, address, city, state, pincode } = req.body;
+    const { name, phone, bio, preferences, payment_methods, address, city, state, pincode, pan_number, gst_enrolment_id, gst_number } = req.body;
 
     const result = await pool.query(
       `UPDATE users 
@@ -35,9 +35,12 @@ exports.updateUserProfile = async (req, res) => {
            address = COALESCE($6, address),
            city = COALESCE($7, city),
            state = COALESCE($8, state),
-           pincode = COALESCE($9, pincode)
-       WHERE id = $10
-       RETURNING id, name, email, phone, bio, profile_image, preferences, payment_methods, address, city, state, pincode`,
+           pincode = COALESCE($9, pincode),
+           pan_number = COALESCE($10, pan_number),
+           gst_enrolment_id = COALESCE($11, gst_enrolment_id),
+           gst_number = COALESCE($12, gst_number)
+       WHERE id = $13
+       RETURNING id, name, email, phone, bio, profile_image, preferences, payment_methods, address, city, state, pincode, pan_number, gst_enrolment_id, gst_number`,
       [
         name, 
         phone, 
@@ -48,6 +51,9 @@ exports.updateUserProfile = async (req, res) => {
         city,
         state,
         pincode,
+        pan_number,
+        gst_enrolment_id,
+        gst_number,
         id
       ]
     );

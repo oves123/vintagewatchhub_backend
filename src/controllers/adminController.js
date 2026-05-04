@@ -804,3 +804,72 @@ exports.verifyPayment = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.getTaxReport = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let query = `
+      SELECT 
+        d.id as deal_id,
+        d.created_at,
+        d.status as deal_status,
+        d.amount as gross_amount,
+        d.commission_amount,
+        d.platform_gst_amount,
+        d.total_platform_fee,
+        d.seller_payout,
+        d.seller_gst_applicable,
+        d.seller_gst_number,
+        d.tcs_rate,
+        d.tcs_amount,
+        u_seller.name as seller_name,
+        u_seller.state as seller_state,
+        u_seller.pan_number,
+        u_seller.gst_enrolment_id,
+        u_buyer.name as buyer_name,
+        u_buyer.state as buyer_state
+      FROM product_deals d
+      JOIN users u_seller ON d.seller_id = u_seller.id
+      JOIN users u_buyer ON d.buyer_id = u_buyer.id
+      WHERE d.status IN ('PAID', 'SHIPPED', 'DELIVERED', 'CONFIRMED')
+    `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ` AND d.created_at BETWEEN $1 AND $2`;
+      params.push(startDate, endDate);
+    }
+
+    query += ` ORDER BY d.created_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    // Calculate Totals
+    let totalGross = 0;
+    let totalCommission = 0;
+    let totalPlatformGst = 0;
+    let totalTCS = 0;
+
+    result.rows.forEach(row => {
+      totalGross += parseFloat(row.gross_amount || 0);
+      totalCommission += parseFloat(row.commission_amount || 0);
+      totalPlatformGst += parseFloat(row.platform_gst_amount || 0);
+      totalTCS += parseFloat(row.tcs_amount || 0);
+    });
+
+    res.json({
+      summary: {
+        total_transactions: result.rows.length,
+        total_gross_value: totalGross,
+        total_commission: totalCommission,
+        total_platform_gst: totalPlatformGst,
+        total_tcs_deducted: totalTCS
+      },
+      transactions: result.rows
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

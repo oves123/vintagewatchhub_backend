@@ -20,6 +20,18 @@ exports.createOffer = async (req, res) => {
     //   return res.status(400).json({ message: "This product does not accept offers" });
     // }
 
+    // 1.5 Check Geographic Restrictions
+    const product = productCheck.rows[0];
+    const buyerRes = await pool.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
+    const buyer = buyerRes.rows[0];
+
+    const sellerRes = await pool.query("SELECT state FROM users WHERE id = $1", [seller_id]);
+    const seller = sellerRes.rows[0];
+
+    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      return res.status(403).json({ message: `Shipping Restricted: This seller is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot make an offer on this item.` });
+    }
+
     // 2. Check offer limit (5 per product/buyer)
     const limitCheck = await pool.query(
       "SELECT COUNT(*) FROM product_offers WHERE product_id = $1 AND buyer_id = $2",
@@ -118,7 +130,15 @@ exports.respondToOffer = async (req, res) => {
         const commission_amount = finalAmount * (commissionRate / 100);
         const platform_gst_amount = commission_amount * (gstRate / 100);
         const total_platform_fee = commission_amount + platform_gst_amount;
-        const seller_payout = (finalAmount - total_platform_fee) + shippingFee;
+        
+        let tcs_rate = 0;
+        let tcs_amount = 0;
+        if (seller.gst_number) {
+            tcs_rate = 1.00; // 1%
+            tcs_amount = finalAmount * 0.01;
+        }
+
+        const seller_payout = (finalAmount - total_platform_fee - tcs_amount) + shippingFee;
         const seller_gst_applicable = seller.seller_type === 'business_seller';
         const seller_gst_number = seller.gst_number;
 
@@ -126,13 +146,13 @@ exports.respondToOffer = async (req, res) => {
           `INSERT INTO product_deals (
             product_id, buyer_id, seller_id, offer_id, amount, shipping_fee, shipping_type, status, expires_at,
             commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number, payment_status
+            seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount
           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING')`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING', $16, $17)`,
           [
             offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, shippingFee, product.shipping_type, expiresAt,
             commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number
+            seller_payout, seller_gst_applicable, seller_gst_number, tcs_rate, tcs_amount
           ]
         );
 

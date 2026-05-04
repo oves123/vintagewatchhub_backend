@@ -26,6 +26,17 @@ exports.placeBid = async (req, res) => {
       return res.status(400).json({ message: "This product is not listed for auction" });
     }
 
+    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [user_id]);
+    const buyer = buyerRes.rows[0];
+
+    const sellerRes = await client.query("SELECT state FROM users WHERE id = $1", [product.seller_id]);
+    const seller = sellerRes.rows[0];
+
+    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: `Shipping Restricted: This seller is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot place a bid on this item.` });
+    }
+
     if (new Date(product.auction_end) < new Date()) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: "This auction has ended" });

@@ -26,7 +26,8 @@ exports.createProduct = async (req, res) => {
       allow_offers,
       reserve_price,
       video_settings,
-      media_order
+      media_order,
+      shipping_scope
     } = req.body;
 
     let mappedVideoSettings = {};
@@ -82,8 +83,8 @@ exports.createProduct = async (req, res) => {
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
        condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
-       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings, shipping_scope)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
       RETURNING *`,
       [
         title, 
@@ -108,7 +109,8 @@ exports.createProduct = async (req, res) => {
         auction_end || null,
         isTrue(allow_offers),
         reserve_price || 0,
-        JSON.stringify(mappedVideoSettings)
+        JSON.stringify(mappedVideoSettings),
+        shipping_scope || 'LOCAL'
       ]
     );
 
