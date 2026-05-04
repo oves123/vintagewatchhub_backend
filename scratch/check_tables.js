@@ -7,8 +7,8 @@ const pool = new Pool({
 
 async function check() {
   try {
-    const res = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'product_views'");
-    console.log('Columns in product_views:', res.rows);
+    const res = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
+    console.log('Tables:', res.rows.map(r => r.table_name));
   } catch (err) {
     console.error('Check failed:', err);
   } finally {

@@ -425,21 +425,29 @@ exports.getProductById = async (req, res) => {
   try {
     const { id } = req.params;
     const { viewerId } = req.query;
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // Increment views (Unique per user if viewerId provided)
-    if (viewerId) {
-      const viewCheck = await pool.query(
-        "SELECT id FROM product_views WHERE product_id = $1 AND user_id = $2",
-        [id, viewerId]
+    // Increment views (Unique per user/IP)
+    let viewCheck;
+    const isRealUser = viewerId && viewerId !== 'null' && viewerId !== 'undefined';
+    
+    if (isRealUser) {
+      viewCheck = await pool.query(
+        "SELECT id FROM product_views WHERE product_id = $1 AND (user_id = $2 OR ip_address = $3)",
+        [id, viewerId, ip]
       );
-
-      if (viewCheck.rows.length === 0) {
-        await pool.query("INSERT INTO product_views (product_id, user_id) VALUES ($1, $2)", [id, viewerId]);
-        await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
-      }
     } else {
-      // For guests, we still increment views but not uniquely (or we could choose to skip)
-      // Standard practice: increment for every visit if no ID
+      viewCheck = await pool.query(
+        "SELECT id FROM product_views WHERE product_id = $1 AND ip_address = $2",
+        [id, ip]
+      );
+    }
+
+    if (viewCheck.rows.length === 0) {
+      await pool.query(
+        "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
+        [id, isRealUser ? viewerId : null, ip]
+      );
       await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
     }
 

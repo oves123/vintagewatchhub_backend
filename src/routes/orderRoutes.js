@@ -34,7 +34,7 @@ router.patch("/:id/mark-paid", authMiddleware, upload.single("receipt"), orderCo
 router.patch("/:id/shipped", authMiddleware, cloudUpload.single("packing_video"), orderController.markShipped);
 router.patch("/:id/delivered", authMiddleware, orderController.markDelivered); // Seller manually marks
 router.patch("/:id/confirm-received", authMiddleware, orderController.confirmReceived); // Buyer manually marks
-router.patch("/:id/confirm-sale", authMiddleware, orderController.confirmSale); // Final confirmation
+router.patch("/:id/confirm-sale", authMiddleware, cloudUpload.single("unboxing_video"), orderController.confirmSale); // Final confirmation
 router.patch("/:id/cancel", authMiddleware, orderController.cancelDeal);
 router.patch("/:id/dispute", authMiddleware, orderController.disputeDeal);
 router.patch("/:id/returned", authMiddleware, orderController.markReturned);

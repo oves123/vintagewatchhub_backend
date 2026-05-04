@@ -5,15 +5,15 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/watch_marketplace'
 });
 
-async function check() {
+async function migrate() {
   try {
-    const res = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'product_views'");
-    console.log('Columns in product_views:', res.rows);
+    await pool.query('ALTER TABLE product_views ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45)');
+    console.log('Column ip_address added successfully to product_views');
   } catch (err) {
-    console.error('Check failed:', err);
+    console.error('Migration failed:', err);
   } finally {
     await pool.end();
   }
 }
 
-check();
+migrate();

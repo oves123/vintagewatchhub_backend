@@ -34,6 +34,7 @@ router.patch("/reports/:id", adminMiddleware, adminController.resolveReport);
 
 // Transaction & Chat Moderation
 router.patch("/deals/:id/resolve", adminMiddleware, adminController.resolveDeal);
+router.patch("/deals/:id/verify-payment", adminMiddleware, adminController.verifyPayment);
 router.get("/chats/:id/messages", adminMiddleware, adminController.getChatHistory);
 
 // Escrow & Financials

@@ -738,3 +738,69 @@ exports.getBids = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.verifyPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'PAID' or 'REJECTED'
+    const adminId = req.user.id;
+
+    if (!['PAID', 'REJECTED'].includes(status)) {
+      return res.status(400).json({ error: "Invalid verification status. Must be PAID or REJECTED." });
+    }
+
+    const result = await pool.query(
+      "UPDATE product_deals SET status = $1, payment_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'PAYMENT_SUBMITTED' RETURNING *",
+      [status === 'PAID' ? 'PAID' : 'ACCEPTED', id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Deal not found or not in verification state" });
+    }
+
+    const deal = result.rows[0];
+    const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+    const productTitle = productRes.rows[0]?.title || "Watch";
+
+    if (status === 'PAID') {
+      // Notify Seller to ship
+      await notificationService.createNotification({
+        user_id: deal.seller_id,
+        title: "Payment Verified! 💸",
+        message: `The payment for "${productTitle}" has been verified by Admin. You can now ship the item.`,
+        type: 'success',
+        link: '/profile?tab=selling'
+      });
+      // Notify Buyer
+      await notificationService.createNotification({
+        user_id: deal.buyer_id,
+        title: "Payment Confirmed! ✅",
+        message: `Your payment for "${productTitle}" has been verified. The seller will ship your item soon.`,
+        type: 'success',
+        link: '/profile?tab=buying'
+      });
+    } else {
+      // REJECTED - Notify Buyer
+      await notificationService.createNotification({
+        user_id: deal.buyer_id,
+        title: "Payment Rejected ❌",
+        message: `Your payment for "${productTitle}" was rejected. Please contact support or re-upload the receipt.`,
+        type: 'error',
+        link: '/profile?tab=buying'
+      });
+      
+      // We already reset status to 'ACCEPTED' and payment_status to 'ACCEPTED' in the UPDATE query if it was rejected.
+      // Wait, let's fix that update query to be more precise.
+      await pool.query(
+        "UPDATE product_deals SET payment_status = 'PENDING', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [id]
+      );
+    }
+
+    await logAdminAction(adminId, `verify_payment_${status}`, 'deal', id, { status }, req.ip);
+
+    res.json({ message: `Payment ${status} successfully`, deal: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
