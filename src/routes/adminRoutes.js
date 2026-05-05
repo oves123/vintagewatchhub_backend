@@ -41,6 +41,7 @@ router.get("/chats/:id/messages", adminMiddleware, adminController.getChatHistor
 router.get("/escrow", adminMiddleware, adminController.getEscrowDeals);
 router.patch("/deals/:id/release-payout", adminMiddleware, adminController.releasePayout);
 router.get("/financials", adminMiddleware, adminController.getFinancials);
+router.get("/financial-ledger", adminMiddleware, adminController.getGlobalFinancialLedger);
 router.get("/tax-report", adminMiddleware, adminController.getTaxReport);
 
 module.exports = router;

@@ -876,3 +876,87 @@ exports.getTaxReport = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Get Global Financial Ledger for Admin (All transactions)
+exports.getGlobalFinancialLedger = async (req, res) => {
+  const { startDate, endDate, status, search, year } = req.query;
+  
+  try {
+    let query = `
+      SELECT 
+        d.*, 
+        p.title as product_title, 
+        p.image as product_image,
+        b.name as buyer_name,
+        b.email as buyer_email,
+        s.name as seller_name,
+        s.email as seller_email,
+        (d.amount + d.shipping_fee + d.buyer_commission_amount + (d.buyer_commission_amount * 0.18)) as total_buyer_cost
+      FROM product_deals d
+      JOIN products p ON d.product_id = p.id
+      JOIN users b ON d.buyer_id = b.id
+      JOIN users s ON d.seller_id = s.id
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramCount = 0;
+
+    if (startDate) {
+      paramCount++;
+      query += ` AND d.created_at >= $${paramCount}`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      paramCount++;
+      query += ` AND d.created_at <= $${paramCount}`;
+      params.push(endDate + ' 23:59:59');
+    }
+    if (year && !startDate && !endDate) {
+      paramCount++;
+      query += ` AND EXTRACT(YEAR FROM d.created_at) = $${paramCount}`;
+      params.push(year);
+    }
+    if (status && status !== 'ALL') {
+      paramCount++;
+      query += ` AND d.status = $${paramCount}`;
+      params.push(status);
+    }
+    if (search) {
+      paramCount++;
+      query += ` AND (p.title ILIKE $${paramCount} OR b.name ILIKE $${paramCount} OR s.name ILIKE $${paramCount} OR d.id::text = $${paramCount})`;
+      params.push(`%${search}%`);
+    }
+
+    query += ` ORDER BY d.created_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    // Calculate Global Summary for the current filtered view
+    let totalGross = 0;
+    let totalCommissions = 0;
+    let totalGst = 0;
+    let totalShipping = 0;
+
+    result.rows.forEach(row => {
+      totalGross += parseFloat(row.amount || 0);
+      totalCommissions += parseFloat(row.total_platform_fee || 0);
+      totalGst += parseFloat(row.platform_gst_amount || 0);
+      totalShipping += parseFloat(row.shipping_fee || 0);
+    });
+
+    res.json({
+      summary: {
+        total_deals: result.rows.length,
+        gross_merchandise_value: totalGross,
+        platform_revenue: totalCommissions,
+        gst_collected: totalGst,
+        shipping_handled: totalShipping
+      },
+      ledger: result.rows
+    });
+  } catch (error) {
+    console.error("Global Ledger Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
