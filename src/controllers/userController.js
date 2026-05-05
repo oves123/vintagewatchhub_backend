@@ -167,3 +167,47 @@ exports.acceptTerms = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Get User Financial Reports (Aggregated by month/year)
+exports.getMyFinancialReports = async (req, res) => {
+  const { id } = req.params;
+  const { year } = req.query;
+  const targetYear = year || new Date().getFullYear();
+
+  try {
+    // 1. Monthly Aggregates for the selected year
+    const monthlyStats = await pool.query(`
+      SELECT 
+        EXTRACT(MONTH FROM created_at) as month,
+        SUM(CASE WHEN seller_id = $1 THEN amount ELSE 0 END) as sales_volume,
+        SUM(CASE WHEN buyer_id = $1 THEN amount ELSE 0 END) as purchase_volume,
+        COUNT(CASE WHEN seller_id = $1 THEN 1 END) as items_sold,
+        COUNT(CASE WHEN buyer_id = $1 THEN 1 END) as items_bought
+      FROM product_deals
+      WHERE (seller_id = $1 OR buyer_id = $1)
+        AND status = 'CONFIRMED'
+        AND EXTRACT(YEAR FROM created_at) = $2
+      GROUP BY month
+      ORDER BY month ASC
+    `, [id, targetYear]);
+
+    // 2. Lifetime Totals
+    const lifetimeStats = await pool.query(`
+       SELECT 
+         SUM(CASE WHEN seller_id = $1 THEN amount ELSE 0 END) as total_sales,
+         SUM(CASE WHEN buyer_id = $1 THEN amount ELSE 0 END) as total_spent,
+         COUNT(CASE WHEN seller_id = $1 THEN 1 END) as total_items_sold,
+         COUNT(CASE WHEN buyer_id = $1 THEN 1 END) as total_items_bought
+       FROM product_deals
+       WHERE status = 'CONFIRMED' AND (seller_id = $1 OR buyer_id = $1)
+    `, [id]);
+
+    res.json({
+      year: targetYear,
+      monthly: monthlyStats.rows,
+      totals: lifetimeStats.rows[0] || { total_sales: 0, total_spent: 0, total_items_sold: 0, total_items_bought: 0 }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

@@ -106,10 +106,11 @@ exports.respondToOffer = async (req, res) => {
         const product = productRes.rows[0];
 
         // 2. Fetch platform settings and seller details for calculations
-        const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('commission_rate', 'gst_rate')");
+        const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
         const settings = {};
         settingsRes.rows.forEach(r => settings[r.key] = r.value);
-        const commissionRate = parseFloat(settings.commission_rate || 5);
+        const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
+        const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
         const gstRate = parseFloat(settings.gst_rate || 18);
 
         const sellerRes = await pool.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
@@ -127,9 +128,10 @@ exports.respondToOffer = async (req, res) => {
         const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
 
         // 4. Calculations
-        const commission_amount = finalAmount * (commissionRate / 100);
-        const platform_gst_amount = commission_amount * (gstRate / 100);
-        const total_platform_fee = commission_amount + platform_gst_amount;
+        const seller_commission_amount = finalAmount * (sellerCommissionRate / 100);
+        const buyer_commission_amount = finalAmount * (buyerCommissionRate / 100);
+        const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
+        const total_platform_fee = seller_commission_amount + buyer_commission_amount + platform_gst_amount;
         
         let tcs_rate = 0;
         let tcs_amount = 0;
@@ -138,7 +140,7 @@ exports.respondToOffer = async (req, res) => {
             tcs_amount = finalAmount * 0.01;
         }
 
-        const seller_payout = (finalAmount - total_platform_fee - tcs_amount) + shippingFee;
+        const seller_payout = (finalAmount - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
         const seller_gst_applicable = seller.seller_type === 'business_seller';
         const seller_gst_number = seller.gst_number;
 
@@ -146,13 +148,15 @@ exports.respondToOffer = async (req, res) => {
           `INSERT INTO product_deals (
             product_id, buyer_id, seller_id, offer_id, amount, shipping_fee, shipping_type, status, expires_at,
             commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount
+            seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
+            buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING', $16, $17)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING', $16, $17, $18, $19, $20, $21)`,
           [
             offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, shippingFee, product.shipping_type, expiresAt,
-            commissionRate, commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number, tcs_rate, tcs_amount
+            sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
+            seller_payout, seller_gst_applicable, seller_gst_number, tcs_rate, tcs_amount,
+            buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
           ]
         );
 

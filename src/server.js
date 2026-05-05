@@ -18,6 +18,7 @@ const reviewRoutes = require("./routes/reviewRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const labelRoutes = require("./routes/labelRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 const app = express();
 const server = http.createServer(app);
@@ -70,6 +71,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/labels", labelRoutes);
+app.use("/api/payment", paymentRoutes);
 app.use("/api", chatRoutes);
 
 // 404 handler
