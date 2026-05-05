@@ -8,6 +8,8 @@ const authMiddleware = require("../middleware/authMiddleware");
 router.get("/profile/:id", userController.getUserProfile);
 router.put("/profile/:id", userController.updateUserProfile);
 router.get("/activity/:id", userController.getUserActivity);
+router.get("/reports/:id", userController.getMyFinancialReports);
+router.get("/ledger/:id", userController.getMyFinancialLedger);
 
 // T&C Acceptance
 router.post("/accept-terms", authMiddleware, userController.acceptTerms);

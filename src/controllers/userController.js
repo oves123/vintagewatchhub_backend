@@ -211,3 +211,72 @@ exports.getMyFinancialReports = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Get Detailed Financial Ledger (Individual Transactions)
+exports.getMyFinancialLedger = async (req, res) => {
+  const { id } = req.params;
+  const { year, month, status, role, search, startDate, endDate } = req.query;
+  
+  try {
+    let query = `
+      SELECT 
+        d.*, 
+        p.title as product_title, 
+        p.image as product_image,
+        b.name as buyer_name,
+        s.name as seller_name,
+        (d.amount + d.shipping_fee + d.buyer_commission_amount + (d.buyer_commission_amount * 0.18)) as total_buyer_cost
+      FROM product_deals d
+      JOIN products p ON d.product_id = p.id
+      JOIN users b ON d.buyer_id = b.id
+      JOIN users s ON d.seller_id = s.id
+      WHERE (d.seller_id = $1 OR d.buyer_id = $1)
+    `;
+    
+    const params = [id];
+    let paramCount = 1;
+
+    if (startDate) {
+      paramCount++;
+      query += ` AND d.created_at >= $${paramCount}`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      paramCount++;
+      query += ` AND d.created_at <= $${paramCount}`;
+      params.push(endDate + ' 23:59:59'); // Include the full end day
+    }
+    if (year && !startDate && !endDate) {
+      paramCount++;
+      query += ` AND EXTRACT(YEAR FROM d.created_at) = $${paramCount}`;
+      params.push(year);
+    }
+    if (month && !startDate && !endDate) {
+      paramCount++;
+      query += ` AND EXTRACT(MONTH FROM d.created_at) = $${paramCount}`;
+      params.push(month);
+    }
+    if (status && status !== 'ALL') {
+      paramCount++;
+      query += ` AND d.status = $${paramCount}`;
+      params.push(status);
+    }
+    if (role === 'buyer') {
+      query += ` AND d.buyer_id = $1`;
+    } else if (role === 'seller') {
+      query += ` AND d.seller_id = $1`;
+    }
+    if (search) {
+      paramCount++;
+      query += ` AND p.title ILIKE $${paramCount}`;
+      params.push(`%${search}%`);
+    }
+
+    query += ` ORDER BY d.created_at DESC`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
