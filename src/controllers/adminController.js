@@ -808,6 +808,57 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
+exports.processRefund = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminId = req.user.id;
+
+    // 1. Fetch deal details to verify state
+    const dealCheck = await pool.query("SELECT * FROM product_deals WHERE id = $1", [id]);
+    if (dealCheck.rows.length === 0) return res.status(404).json({ message: "Deal not found" });
+
+    const deal = dealCheck.rows[0];
+    if (deal.status !== 'REFUND_PENDING') {
+      return res.status(400).json({ message: "Refund can only be processed for deals in REFUND_PENDING state." });
+    }
+
+    // 2. Finalize the refund in database
+    const result = await pool.query(
+      `UPDATE product_deals 
+       SET status = 'CANCELLED', 
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 
+       RETURNING *`,
+      [id]
+    );
+
+    // 3. Reactivate the product for the marketplace
+    await pool.query(
+      "UPDATE products SET status = 'approved' WHERE id = $1",
+      [deal.product_id]
+    );
+
+    // 4. Log the admin action
+    await logAdminAction(adminId, 'process_refund', 'deal', id, { amount: deal.amount }, req.ip);
+
+    // 5. Notify the Buyer
+    try {
+      const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+      await notificationService.createNotification({
+        user_id: deal.buyer_id,
+        title: "Refund Processed! 💰",
+        message: `The refund for your order of "${productRes.rows[0]?.title || 'Watch'}" has been processed and sent back to your account.`,
+        type: 'success',
+        link: '/profile?tab=buying'
+      });
+    } catch (err) { console.error("Refund notification failed:", err.message); }
+
+    res.json({ message: 'Refund marked as processed. Product has been reactivated.', deal: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getTaxReport = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
