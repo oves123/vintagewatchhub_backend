@@ -5,18 +5,18 @@ const userController = require("../controllers/userController");
 const authMiddleware = require("../middleware/authMiddleware");
 
 // Profile Routes
-router.get("/profile/:id", userController.getUserProfile);
-router.put("/profile/:id", userController.updateUserProfile);
-router.get("/activity/:id", userController.getUserActivity);
-router.get("/reports/:id", userController.getMyFinancialReports);
-router.get("/ledger/:id", userController.getMyFinancialLedger);
+router.get("/profile/:id", authMiddleware, userController.getUserProfile);
+router.put("/profile/:id", authMiddleware, userController.updateUserProfile);
+router.get("/activity/:id", authMiddleware, userController.getUserActivity);
+router.get("/reports/:id", authMiddleware, userController.getMyFinancialReports);
+router.get("/ledger/:id", authMiddleware, userController.getMyFinancialLedger);
 
 // T&C Acceptance
 router.post("/accept-terms", authMiddleware, userController.acceptTerms);
 router.get("/terms", adminController.getSettings); // Public access to terms via settings
 
 // Watch Vault Routes
-router.get("/vault/:user_id", userController.getWatchVault);
-router.post("/vault/add", userController.addToVault);
+router.get("/vault/:user_id", authMiddleware, userController.getWatchVault);
+router.post("/vault/add", authMiddleware, userController.addToVault);
 
 module.exports = router;

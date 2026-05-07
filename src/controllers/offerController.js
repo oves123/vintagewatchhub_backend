@@ -67,56 +67,65 @@ exports.createOffer = async (req, res) => {
 
 // Respond to an offer
 exports.respondToOffer = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params;
     const { status, counter_amount } = req.body; // status: 'accepted', 'declined', 'countered', 'rejected'
 
-    // 1. Get current offer state
-    const currentRes = await pool.query("SELECT * FROM product_offers WHERE id = $1", [id]);
+    // 1. Get current offer state with lock
+    const currentRes = await client.query("SELECT * FROM product_offers WHERE id = $1 FOR UPDATE", [id]);
     if (currentRes.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: "Offer not found" });
     }
     const oldOffer = currentRes.rows[0];
 
+    if (oldOffer.status !== 'pending' && oldOffer.status !== 'countered') {
+       await client.query('ROLLBACK');
+       return res.status(400).json({ message: `Offer is already ${oldOffer.status}` });
+    }
+
     // 2. Update offer status
-    const result = await pool.query(
+    const result = await client.query(
       `UPDATE product_offers 
-       SET status = $1, counter_amount = $2
+       SET status = $1, counter_amount = $2, updated_at = CURRENT_TIMESTAMP
        WHERE id = $3 
        RETURNING *`,
       [status, status === 'countered' ? counter_amount : oldOffer.counter_amount, id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Offer not found" });
-    }
-
     const offer = result.rows[0];
 
     // If accepted, create a DEAL (state machine)
     if (status === 'accepted') {
-      try {
-        // 1. Auto-reject all other pending offers for this product
-        await pool.query(
+        // 1. Lock product for update
+        const productRes = await client.query("SELECT * FROM products WHERE id = $1 FOR UPDATE", [offer.product_id]);
+        const product = productRes.rows[0];
+
+        if (product.status !== 'approved') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ message: "Product is no longer available" });
+        }
+
+        // 2. Auto-reject all other pending offers for this product
+        await client.query(
           "UPDATE product_offers SET status = 'rejected' WHERE product_id = $1 AND id != $2 AND status = 'pending'",
           [offer.product_id, offer.id]
         );
 
-        const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [offer.product_id]);
-        const product = productRes.rows[0];
-
-        // 2. Fetch platform settings and seller details for calculations
-        const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+        // 3. Fetch platform settings and seller details for calculations
+        const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
         const settings = {};
         settingsRes.rows.forEach(r => settings[r.key] = r.value);
         const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
         const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
         const gstRate = parseFloat(settings.gst_rate || 18);
 
-        const sellerRes = await pool.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
+        const sellerRes = await client.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
         const seller = sellerRes.rows[0];
 
-        // 3. Set expiry (SHIPMENT WINDOW)
+        // 4. Set expiry (SHIPMENT WINDOW)
         const isVerified = seller && seller.is_verified;
         const hoursToAdd = isVerified ? 48 : 72;
         
@@ -127,7 +136,7 @@ exports.respondToOffer = async (req, res) => {
         const finalAmount = parseFloat(oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount);
         const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
 
-        // 4. Calculations
+        // 5. Calculations
         const seller_commission_amount = finalAmount * (sellerCommissionRate / 100);
         const buyer_commission_amount = finalAmount * (buyerCommissionRate / 100);
         const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
@@ -144,7 +153,7 @@ exports.respondToOffer = async (req, res) => {
         const seller_gst_applicable = seller.seller_type === 'business_seller';
         const seller_gst_number = seller.gst_number;
 
-        await pool.query(
+        await client.query(
           `INSERT INTO product_deals (
             product_id, buyer_id, seller_id, offer_id, amount, shipping_fee, shipping_type, status, expires_at,
             commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
@@ -160,21 +169,21 @@ exports.respondToOffer = async (req, res) => {
           ]
         );
 
-        // 5. Update product status to 'under_offer' immediately to lock it
-        await pool.query(
+        // 6. Update product status to 'under_offer' immediately to lock it
+        await client.query(
           "UPDATE products SET status = 'under_offer' WHERE id = $1",
           [offer.product_id]
         );
 
-        // 4. Send System Message to Chat 
-        const chatRes = await pool.query(
+        // 7. Send System Message to Chat 
+        const chatRes = await client.query(
           "SELECT id FROM chats WHERE product_id = $1 AND buyer_id = $2 AND seller_id = $3",
           [offer.product_id, offer.buyer_id, offer.seller_id]
         );
 
         if (chatRes.rows.length > 0) {
           const chatId = chatRes.rows[0].id;
-          const systemMsg = await pool.query(
+          const systemMsg = await client.query(
             "INSERT INTO messages (chat_id, sender_id, message, type, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING *",
             [chatId, offer.seller_id, "Offer Accepted! Please go to your Profile to complete the payment.", "system_deal", JSON.stringify({ offer_id: offer.id, status: 'accepted' })]
           );
@@ -184,18 +193,19 @@ exports.respondToOffer = async (req, res) => {
             io.to(`chat_${chatId}`).emit("newMessage", systemMsg.rows[0]);
           }
         }
-      } catch (dealErr) {
-        console.error("Deal creation/notification failed on offer acceptance:", dealErr);
-      }
     }
 
+    await client.query('COMMIT');
     res.json({
       message: `Offer ${status} successfully`,
       offer: offer
     });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 

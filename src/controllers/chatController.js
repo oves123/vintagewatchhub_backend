@@ -261,3 +261,38 @@ exports.confirmDirectDeal = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.joinDisputeChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const adminId = req.user.id;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Only administrators can intervene in chats." });
+    }
+
+    const dealRes = await pool.query(`
+      SELECT d.* FROM product_deals d
+      JOIN chats c ON d.product_id = c.product_id AND d.buyer_id = c.buyer_id AND d.seller_id = c.seller_id
+      WHERE c.id = $1 AND d.status = 'DISPUTED'
+    `, [chatId]);
+
+    if (dealRes.rows.length === 0) {
+      return res.status(400).json({ error: "Intervention is only permitted for active disputes." });
+    }
+
+    const systemMsg = await pool.query(
+      "INSERT INTO messages (chat_id, sender_id, message, type, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [chatId, adminId, "ANNOUNCEMENT: A marketplace administrator has joined this thread to assist with the dispute resolution.", "system", JSON.stringify({ is_admin: true })]
+    );
+
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`chat_${chatId}`).emit("newMessage", systemMsg.rows[0]);
+    }
+
+    res.json({ message: "Admin joined successfully.", chat_id: chatId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

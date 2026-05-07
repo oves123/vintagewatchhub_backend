@@ -29,6 +29,7 @@ router.post("/buy-now", authMiddleware, orderController.buyNowDirect);
 router.get("/buyer/:user_id", authMiddleware, orderController.getBuyerOrders);
 router.get("/seller/:seller_id", authMiddleware, orderController.getSellerOrders);
 router.get("/user-deals/:user_id", authMiddleware, orderController.getUserDeals);
+router.post("/:id/upload-evidence", authMiddleware, cloudUpload.array("evidence", 5), orderController.uploadEvidence);
 
 router.patch("/:id/mark-paid", authMiddleware, upload.single("receipt"), orderController.markDealAsPaid);
 router.patch("/:id/shipped", authMiddleware, cloudUpload.single("packing_video"), orderController.markShipped);

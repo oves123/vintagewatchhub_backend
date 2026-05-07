@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const slugify = require("../utils/slugify");
 const notificationService = require("../services/notificationService");
 
 exports.createProduct = async (req, res) => {
@@ -79,12 +80,15 @@ exports.createProduct = async (req, res) => {
       finalStatus = 'approved';
     }
 
+    const baseSlug = slugify(title);
+    const slug = `${baseSlug}-${Date.now().toString().slice(-4)}`;
+
     const result = await pool.query(
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
        condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
-       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings, shipping_scope)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings, shipping_scope, slug)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
       RETURNING *`,
       [
         title, 
@@ -110,7 +114,8 @@ exports.createProduct = async (req, res) => {
         isTrue(allow_offers),
         reserve_price || 0,
         JSON.stringify(mappedVideoSettings),
-        shipping_scope || 'LOCAL'
+        shipping_scope || 'LOCAL',
+        slug
       ]
     );
 
@@ -147,7 +152,7 @@ exports.updateProduct = async (req, res) => {
       condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
       shipping_fee, shipping_type,
       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price,
-      existing_images, video_settings, media_order
+      existing_images, video_settings, media_order, shipping_scope
     } = req.body;
 
     // Listing Options Validation (Max 2 out of 3)
@@ -157,10 +162,22 @@ exports.updateProduct = async (req, res) => {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
     }
 
+    // Ownership and existence check
+    const currentProductResult = await pool.query("SELECT * FROM products WHERE id = $1", [id]);
+    if (currentProductResult.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    
+    const product = currentProductResult.rows[0];
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Only allow seller or admin to update
+    if (parseInt(product.seller_id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied. You can only update your own listings." });
+    }
+
     // Status logic: If already approved, keep it approved unless explicitly changed
     let finalStatus = status;
-    const currentProduct = await pool.query("SELECT status FROM products WHERE id = $1", [id]);
-    if (currentProduct.rows.length > 0 && currentProduct.rows[0].status === 'approved' && status === 'pending') {
+    if (product.status === 'approved' && status === 'pending') {
       finalStatus = 'approved';
     }
 
@@ -205,34 +222,8 @@ exports.updateProduct = async (req, res) => {
       finalImages = [...finalImages, ...Object.values(fileMap)];
     }
 
-    let queryParams = [
-      title, 
-      description, 
-      price, 
-      category_id, 
-      product_type, 
-      condition_code, 
-      typeof item_specifics === 'string' ? item_specifics : JSON.stringify(item_specifics || {}),
-      typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {}),
-      typeof shipping_info === 'string' ? shipping_info : JSON.stringify(shipping_info || {}),
-      typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
-      finalStatus, 
-      shipping_fee || 0,
-      shipping_type || 'fixed',
-      isTrue(allow_buy_now),
-      buy_it_now_price || null,
-      isTrue(allow_auction),
-      starting_bid || 0,
-      auction_end || null,
-      isTrue(allow_offers),
-      reserve_price || 0,
-      JSON.stringify(finalImages),
-      JSON.stringify(mappedVideoSettings)
-    ];
-
-    // Add ID as the last parameter
-    queryParams.push(id);
-    const idParamIndex = queryParams.length;
+    const baseSlug = slugify(title);
+    const slug = `${baseSlug}-${id.toString().slice(-4)}`;
 
     const result = await pool.query(
       `UPDATE products SET 
@@ -242,9 +233,35 @@ exports.updateProduct = async (req, res) => {
         shipping_fee = $12, shipping_type = $13,
         allow_buy_now = $14, buy_it_now_price = $15, allow_auction = $16,
         starting_bid = $17, auction_end = $18, allow_offers = $19, reserve_price = $20,
-        images = $21, video_settings = $22
-      WHERE id = $${idParamIndex} RETURNING *`,
-      queryParams
+        images = $21, video_settings = $22, shipping_scope = $23, slug = $24
+      WHERE id = $25 RETURNING *`,
+      [
+        title, 
+        description, 
+        price, 
+        category_id, 
+        product_type, 
+        condition_code, 
+        typeof item_specifics === 'string' ? item_specifics : JSON.stringify(item_specifics || {}),
+        typeof condition_details === 'string' ? condition_details : JSON.stringify(condition_details || {}),
+        typeof shipping_info === 'string' ? shipping_info : JSON.stringify(shipping_info || {}),
+        typeof payment_info === 'string' ? payment_info : JSON.stringify(payment_info || {}),
+        finalStatus, 
+        shipping_fee || 0,
+        shipping_type || 'fixed',
+        isTrue(allow_buy_now),
+        buy_it_now_price || null,
+        isTrue(allow_auction),
+        starting_bid || 0,
+        auction_end || null,
+        isTrue(allow_offers),
+        reserve_price || 0,
+        JSON.stringify(finalImages),
+        JSON.stringify(mappedVideoSettings),
+        shipping_scope || 'LOCAL',
+        slug,
+        id
+      ]
     );
 
     if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
@@ -255,29 +272,19 @@ exports.updateProduct = async (req, res) => {
   }
 };
 
-exports.updateProductStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    if (!status) return res.status(400).json({ message: "Status is required" });
-
-    const result = await pool.query(
-      "UPDATE products SET status = $1 WHERE id = $2 RETURNING *",
-      [status, id]
-    );
-
-    if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
-
-    res.json({ message: `Product status updated to ${status}`, product: result.rows[0] });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
 exports.deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Check ownership
+    const productRes = await pool.query("SELECT seller_id FROM products WHERE id = $1", [id]);
+    if (productRes.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    
+    if (parseInt(productRes.rows[0].seller_id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied. You can only delete your own listings." });
+    }
     
     // Comprehensive cleanup to prevent FK errors
     await pool.query("DELETE FROM watchlist WHERE product_id = $1", [id]);
@@ -300,8 +307,19 @@ exports.deleteProduct = async (req, res) => {
 exports.getMyListings = async (req, res) => {
   try {
     const { userId } = req.params;
+    const requesterId = req.user.id;
+
+    if (parseInt(userId) !== parseInt(requesterId)) {
+      return res.status(403).json({ message: "Access denied." });
+    }
     const result = await pool.query(
-      "SELECT products.*, categories.name as category_name FROM products LEFT JOIN categories ON products.category_id = categories.id WHERE seller_id = $1 ORDER BY id DESC",
+      `SELECT products.*, categories.name as category_name,
+              (SELECT COUNT(*) FROM watchlist WHERE product_id = products.id) as watchlist_count,
+              (SELECT COUNT(*) FROM product_views WHERE product_id = products.id) as view_count
+       FROM products 
+       LEFT JOIN categories ON products.category_id = categories.id 
+       WHERE seller_id = $1 
+       ORDER BY id DESC`,
       [userId]
     );
     const products = result.rows.map(resObj => {
@@ -461,15 +479,16 @@ exports.getProductById = async (req, res) => {
       FROM products
       LEFT JOIN categories ON products.category_id = categories.id
       LEFT JOIN users ON products.seller_id = users.id
-      WHERE products.id = $1
+      WHERE products.${isNumeric ? 'id' : 'slug'} = $1
     `;
-    const result = await pool.query(query, [id]);
-    
+
+    result = await pool.query(baseQuery, [id]);
+
+    if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+
     const resObj = result.rows[0];
-    if (!resObj) return res.status(404).json({ message: "Product not found" });
-    if (resObj.images && typeof resObj.images === 'string') {
-      try { resObj.images = JSON.parse(resObj.images); } catch(e) { resObj.images = []; }
-    }
+
+    // Parse JSON fields
     if (resObj.item_specifics && typeof resObj.item_specifics === 'string') {
       try { resObj.item_specifics = JSON.parse(resObj.item_specifics); } catch(e) { resObj.item_specifics = {}; }
     }
@@ -482,6 +501,16 @@ exports.getProductById = async (req, res) => {
     if (resObj.payment_info && typeof resObj.payment_info === 'string') {
       try { resObj.payment_info = JSON.parse(resObj.payment_info); } catch(e) { resObj.payment_info = {}; }
     }
+
+    // Auto-record view
+    try {
+      const user_id = req.user ? req.user.id : null;
+      const ip_address = req.ip;
+      await pool.query(
+        "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
+        [resObj.id, user_id, ip_address]
+      );
+    } catch(e) { console.error("View recording failed:", e.message); }
 
     res.json(resObj);
   } catch (error) {
@@ -504,5 +533,32 @@ exports.getCategories = async (req, res) => {
     res.json(categoriesWithSpecs);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getBrands = async (req, res) => {
+  try {
+    const result = await pool.query("SELECT DISTINCT item_specifics->>'brand' as brand FROM products WHERE item_specifics->>'brand' IS NOT NULL ORDER BY brand ASC");
+    res.json(result.rows.map(r => r.brand));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.recordProductView = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user_id = req.user ? req.user.id : null;
+    const ip_address = req.ip;
+
+    await pool.query(
+      "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
+      [id, user_id, ip_address]
+    );
+
+    res.json({ message: "View recorded" });
+  } catch (error) {
+    console.error("View recording failed:", error.message);
+    res.status(200).json({ message: "View record failed silently" });
   }
 };

@@ -4,6 +4,14 @@ const pool = require("../config/db");
 exports.getUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Only allow self or admin
+    if (parseInt(id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied. You can only view your own profile." });
+    }
+
     const result = await pool.query(
       "SELECT id, name, email, phone, bio, profile_image, address, city, state, pincode, is_verified, seller_badge, rating, total_sold, total_bought, preferences, joined_date, seller_type, gst_number, pan_number, gst_enrolment_id FROM users WHERE id = $1",
       [id]
@@ -23,6 +31,14 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Only allow self or admin
+    if (parseInt(id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied. You can only update your own profile." });
+    }
+
     const { name, phone, bio, preferences, payment_methods, address, city, state, pincode, pan_number, gst_enrolment_id, gst_number } = req.body;
 
     const result = await pool.query(
@@ -71,6 +87,13 @@ exports.updateUserProfile = async (req, res) => {
 exports.getUserActivity = async (req, res) => {
   try {
     const { id } = req.params;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Only allow self or admin
+    if (parseInt(id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied." });
+    }
 
     // Fetch Buy Orders (Acquisitions)
     const buyOrders = await pool.query(
@@ -132,6 +155,11 @@ exports.getUserActivity = async (req, res) => {
 exports.getWatchVault = async (req, res) => {
   try {
     const { user_id } = req.params;
+    const requesterId = req.user.id;
+
+    if (parseInt(user_id) !== parseInt(requesterId)) {
+      return res.status(403).json({ message: "Access denied." });
+    }
     const result = await pool.query(
       "SELECT * FROM watch_vault WHERE user_id = $1 ORDER BY created_at DESC",
       [user_id]
@@ -171,6 +199,11 @@ exports.acceptTerms = async (req, res) => {
 // Get User Financial Reports (Aggregated by month/year)
 exports.getMyFinancialReports = async (req, res) => {
   const { id } = req.params;
+  const requesterId = req.user.id;
+
+  if (parseInt(id) !== parseInt(requesterId)) {
+    return res.status(403).json({ message: "Access denied." });
+  }
   const { year } = req.query;
   const targetYear = year || new Date().getFullYear();
 
@@ -215,6 +248,11 @@ exports.getMyFinancialReports = async (req, res) => {
 // Get Detailed Financial Ledger (Individual Transactions)
 exports.getMyFinancialLedger = async (req, res) => {
   const { id } = req.params;
+  const requesterId = req.user.id;
+
+  if (parseInt(id) !== parseInt(requesterId)) {
+    return res.status(403).json({ message: "Access denied." });
+  }
   const { year, month, status, role, search, startDate, endDate } = req.query;
   
   try {

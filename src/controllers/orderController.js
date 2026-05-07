@@ -2,47 +2,55 @@ const pool = require("../config/db");
 const notificationService = require("../services/notificationService");
 
 exports.createAuctionWinnerOrder = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { product_id } = req.body;
 
-    // 1. Get highest bid
-    const bidResult = await pool.query(
+    // 1. Lock product for update
+    const productResult = await client.query(`SELECT * FROM products WHERE id=$1 FOR UPDATE`, [product_id]);
+    const product = productResult.rows[0];
+    if (!product) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Check if a deal already exists
+    const dealCheck = await client.query("SELECT id FROM product_deals WHERE product_id = $1 AND status != 'CANCELLED'", [product_id]);
+    if (dealCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "A deal already exists for this auction winner" });
+    }
+
+    // 2. Get highest bid
+    const bidResult = await client.query(
       `SELECT * FROM bids WHERE product_id=$1 ORDER BY bid_amount DESC LIMIT 1`,
       [product_id]
     );
 
     if (bidResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ message: "No bids found for this auction" });
     }
 
     const highestBid = bidResult.rows[0];
 
-    // 2. Get product and check if already has a deal
-    const productResult = await pool.query(`SELECT * FROM products WHERE id=$1`, [product_id]);
-    const product = productResult.rows[0];
-
-    if (!product) return res.status(404).json({ message: "Product not found" });
-
-    const dealCheck = await pool.query("SELECT id FROM product_deals WHERE product_id = $1 AND status != 'CANCELLED'", [product_id]);
-    if (dealCheck.rows.length > 0) {
-      return res.status(400).json({ message: "A deal already exists for this auction winner" });
-    }
-
     // 3. Fetch platform settings and seller details
-    const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
     const settings = {};
     settingsRes.rows.forEach(r => settings[r.key] = r.value);
     const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
     const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
     const gstRate = parseFloat(settings.gst_rate || 18);
 
-    const buyerRes = await pool.query("SELECT state FROM users WHERE id = $1", [highestBid.user_id]);
+    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [highestBid.user_id]);
     const buyer = buyerRes.rows[0];
 
-    const sellerRes = await pool.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
+    const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
     const seller = sellerRes.rows[0];
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
     }
 
@@ -69,7 +77,7 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
 
     // 4. Create Product Deal
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO product_deals (
         product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
         commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
@@ -86,7 +94,9 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     );
 
     // 5. Update product status
-    await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+
+    await client.query('COMMIT');
 
     res.json({
       message: "Auction winner deal created successfully. Please complete the payment.",
@@ -115,7 +125,10 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     } catch (err) { console.error("Auction winner notification failed:", err.message); }
 
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 exports.getBuyerOrders = async (req, res) => {
@@ -237,14 +250,27 @@ exports.getSellerOrders = async (req, res) => {
 
 // Direct Buy Now
 exports.buyNowDirect = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { product_id, buyer_id } = req.body;
 
-    const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [product_id]);
-    if (productRes.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    // 1. Lock the product record for update to prevent race conditions
+    const productRes = await client.query("SELECT * FROM products WHERE id = $1 FOR UPDATE", [product_id]);
+    if (productRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: "Product not found" });
+    }
     const product = productRes.rows[0];
 
+    // 2. Check if product is available
+    if (product.status !== 'approved') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "This item is no longer available for purchase" });
+    }
+
     if (!product.allow_buy_now && !product.buy_it_now_price) {
+       await client.query('ROLLBACK');
        return res.status(400).json({ message: "Buy Now is not available for this item" });
     }
 
@@ -252,20 +278,21 @@ exports.buyNowDirect = async (req, res) => {
     const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
     
     // Fetch settings and seller
-    const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
     const settings = {};
     settingsRes.rows.forEach(r => settings[r.key] = r.value);
     const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
     const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
     const gstRate = parseFloat(settings.gst_rate || 18);
 
-    const buyerRes = await pool.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
+    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
     const buyer = buyerRes.rows[0];
 
-    const sellerRes = await pool.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
+    const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
     const seller = sellerRes.rows[0];
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
     }
 
@@ -289,12 +316,12 @@ exports.buyNowDirect = async (req, res) => {
     const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
 
     // Reject all pending offers for this product
-    await pool.query(
+    await client.query(
       "UPDATE product_offers SET status = 'rejected' WHERE product_id = $1 AND status = 'pending'",
       [product_id]
     );
 
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO product_deals (
         product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
         commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
@@ -310,7 +337,9 @@ exports.buyNowDirect = async (req, res) => {
       ]
     );
 
-    await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+
+    await client.query('COMMIT');
 
     res.json({ message: "Deal secured successfully. Please complete the payment.", deal: result.rows[0] });
 
@@ -326,7 +355,10 @@ exports.buyNowDirect = async (req, res) => {
     } catch (err) { console.error("Notification error:", err); }
 
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 
@@ -391,21 +423,32 @@ exports.getUserDeals = async (req, res) => {
 
 // Buyer marks deal as PAID
 exports.markDealAsPaid = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params;
     const { payment_method } = req.body;
     const userId = req.user.id;
     const receipt = req.file ? req.file.filename : null;
 
-    console.log("markDealAsPaid debug:", { id, userId, payment_method, receipt });
-    
-    const result = await pool.query(
-      "UPDATE product_deals SET status = 'PAYMENT_SUBMITTED', payment_status = 'PENDING_VERIFICATION', payment_method = $1, payment_receipt = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND buyer_id = $4 AND status = 'ACCEPTED' AND payment_status = 'PENDING' RETURNING *",
-      [payment_method, receipt, id, userId]
+    // 5. Update Deal Status
+    const result = await client.query(
+      "UPDATE product_deals SET status = 'PAID', payment_status = 'PAID', payment_receipt = $1, payment_method = 'DIRECT_TRANSFER', updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND buyer_id = $3 RETURNING *",
+      [receipt, id, userId]
     );
-    console.log("UPDATE result rows count:", result.rows.length);
 
-    if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal already paid/submitted' });
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Unauthorized or deal already paid/submitted' });
+    }
+
+    // 6. Log to Financial Ledger
+    await client.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status, metadata) VALUES ($1, $2, $3, 'PAYMENT', 'RECEIVED', $4)",
+      [id, result.rows[0].buyer_id, result.rows[0].amount, JSON.stringify({ method: 'DIRECT_TRANSFER' })]
+    );
+
+    await client.query('COMMIT');
 
     // Notify Admins
     try {
@@ -425,7 +468,10 @@ exports.markDealAsPaid = async (req, res) => {
 
     res.json({ message: 'Payment submitted for verification. Admin has been notified.', deal: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 
@@ -433,7 +479,7 @@ exports.markDealAsPaid = async (req, res) => {
 exports.markShipped = async (req, res) => {
   try {
     const { id } = req.params; 
-    const { seller_id, courier_name, tracking_number } = req.body;
+    const { seller_id, courier_name, tracking_number, is_insured } = req.body;
 
     const dealCheck = await pool.query(
       "SELECT * FROM product_deals WHERE id = $1 AND seller_id = $2 AND status = 'PAID'",
@@ -459,10 +505,15 @@ exports.markShipped = async (req, res) => {
     // Update deal status to 'SHIPPED' or update details if already SHIPPED
     await pool.query(
       `UPDATE product_deals 
-       SET status = 'SHIPPED', tracking_number = $1, courier_name = $2, packing_video = $3,
-           shipped_at = COALESCE(shipped_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $4`,
-      [tracking_number || null, courier_name || 'Hand Delivery', packing_video, id]
+       SET status = 'SHIPPED', 
+           tracking_number = $1, 
+           courier_name = $2, 
+           packing_video = $3,
+           is_insured = $4,
+           shipped_at = COALESCE(shipped_at, CURRENT_TIMESTAMP), 
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $5`,
+      [tracking_number || null, courier_name || 'Hand Delivery', packing_video, is_insured || false, id]
     );
 
     // Update product status to 'sold' on the marketplace (removes from search)
@@ -557,11 +608,24 @@ exports.confirmSale = async (req, res) => {
 
     if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal not in DELIVERED state (Check for DISPUTE)' });
     
-    // Finalize Product status to 'sold' (Only now is it truly sold)
-    const product_id = result.rows[0].product_id;
-    await pool.query("UPDATE products SET status = 'sold' WHERE id = $1", [product_id]);
+    // Release Payout in internal logic
+    const deal = result.rows[0];
+    await pool.query(
+      "UPDATE product_deals SET payout_status = 'RELEASED', payout_released_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [id]
+    );
 
-    res.json({ message: 'Deal finalized! You can now leave a review for the seller.', deal: result.rows[0] });
+    // LOG TO FINANCIAL LEDGER (Payout & Commission)
+    await pool.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
+      [id, deal.seller_id, deal.seller_payout]
+    );
+    await pool.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
+      [id, null, deal.total_platform_fee]
+    );
+
+    res.json({ message: 'Sale confirmed and finalized. Payout released to seller wallet logic.' });
 
     // Notify Seller
     try {
@@ -733,4 +797,44 @@ exports.markReturned = async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-};
+};
+
+exports.uploadEvidence = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const files = req.files ? req.files.map(f => f.filename) : [];
+
+    if (files.length === 0) return res.status(400).json({ message: "No files uploaded." });
+
+    const dealRes = await pool.query("SELECT * FROM product_deals WHERE id = $1", [id]);
+    if (dealRes.rows.length === 0) return res.status(404).json({ message: "Deal not found." });
+    
+    const deal = dealRes.rows[0];
+    if (deal.status !== 'DISPUTED') return res.status(400).json({ message: "Evidence can only be uploaded for disputed deals." });
+
+    const role = (parseInt(deal.buyer_id) === parseInt(userId)) ? 'buyer' : 
+                 (parseInt(deal.seller_id) === parseInt(userId)) ? 'seller' : null;
+    
+    if (!role) return res.status(403).json({ message: "Not authorized to upload evidence for this deal." });
+
+    const currentEvidence = Array.isArray(deal.evidence) ? deal.evidence : [];
+    const newEvidenceEntry = {
+      role,
+      user_id: userId,
+      files,
+      uploaded_at: new Date().toISOString()
+    };
+    
+    const updatedEvidence = [...currentEvidence, newEvidenceEntry];
+
+    await pool.query(
+      "UPDATE product_deals SET evidence = $1 WHERE id = $2",
+      [JSON.stringify(updatedEvidence), id]
+    );
+
+    res.json({ message: "Evidence uploaded successfully.", evidence: updatedEvidence });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

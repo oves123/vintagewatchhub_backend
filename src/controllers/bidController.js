@@ -67,8 +67,8 @@ exports.placeBid = async (req, res) => {
     // 5. Dynamic Extension (Anti-Sniping)
     let isExtended = false;
     const timeRemaining = new Date(product.auction_end) - new Date();
-    if (timeRemaining > 0 && timeRemaining < 5 * 60 * 1000) { // 5 minutes
-      const newAuctionEnd = new Date(new Date(product.auction_end).getTime() + 5 * 60 * 1000);
+    if (timeRemaining > 0 && timeRemaining < 2 * 60 * 1000) { // 2 minutes
+      const newAuctionEnd = new Date(new Date(product.auction_end).getTime() + 2 * 60 * 1000);
       updateQuery += ", auction_end = $3";
       queryParams.push(newAuctionEnd);
       product.auction_end = newAuctionEnd;
