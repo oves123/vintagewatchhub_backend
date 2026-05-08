@@ -447,28 +447,22 @@ exports.getProductById = async (req, res) => {
     const { viewerId } = req.query;
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+    const isNumeric = /^\d+$/.test(id);
+
     // Increment views (Unique per user/IP)
     let viewCheck;
     const isRealUser = viewerId && viewerId !== 'null' && viewerId !== 'undefined';
     
     if (isRealUser) {
       viewCheck = await pool.query(
-        "SELECT id FROM product_views WHERE product_id = $1 AND (user_id = $2 OR ip_address = $3)",
+        "SELECT id FROM product_views WHERE product_id = (SELECT id FROM products WHERE id::text = $1 OR slug = $1 LIMIT 1) AND (user_id = $2 OR ip_address = $3)",
         [id, viewerId, ip]
       );
     } else {
       viewCheck = await pool.query(
-        "SELECT id FROM product_views WHERE product_id = $1 AND ip_address = $2",
+        "SELECT id FROM product_views WHERE product_id = (SELECT id FROM products WHERE id::text = $1 OR slug = $1 LIMIT 1) AND ip_address = $2",
         [id, ip]
       );
-    }
-
-    if (viewCheck.rows.length === 0) {
-      await pool.query(
-        "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
-        [id, isRealUser ? viewerId : null, ip]
-      );
-      await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [id]);
     }
 
     const query = `
@@ -482,11 +476,19 @@ exports.getProductById = async (req, res) => {
       WHERE products.${isNumeric ? 'id' : 'slug'} = $1
     `;
 
-    result = await pool.query(baseQuery, [id]);
+    const result = await pool.query(query, [isNumeric ? parseInt(id) : id]);
 
     if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
 
     const resObj = result.rows[0];
+
+    if (viewCheck.rows.length === 0) {
+      await pool.query(
+        "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
+        [resObj.id, isRealUser ? viewerId : null, ip]
+      );
+      await pool.query("UPDATE products SET views = views + 1 WHERE id = $1", [resObj.id]);
+    }
 
     // Parse JSON fields
     if (resObj.item_specifics && typeof resObj.item_specifics === 'string') {
@@ -502,18 +504,9 @@ exports.getProductById = async (req, res) => {
       try { resObj.payment_info = JSON.parse(resObj.payment_info); } catch(e) { resObj.payment_info = {}; }
     }
 
-    // Auto-record view
-    try {
-      const user_id = req.user ? req.user.id : null;
-      const ip_address = req.ip;
-      await pool.query(
-        "INSERT INTO product_views (product_id, user_id, ip_address) VALUES ($1, $2, $3)",
-        [resObj.id, user_id, ip_address]
-      );
-    } catch(e) { console.error("View recording failed:", e.message); }
-
     res.json(resObj);
   } catch (error) {
+    console.error("Get Product Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -536,10 +529,33 @@ exports.getCategories = async (req, res) => {
   }
 };
 
-exports.getBrands = async (req, res) => {
+exports.updateProductStatus = async (req, res) => {
   try {
-    const result = await pool.query("SELECT DISTINCT item_specifics->>'brand' as brand FROM products WHERE item_specifics->>'brand' IS NOT NULL ORDER BY brand ASC");
-    res.json(result.rows.map(r => r.brand));
+    const { id } = req.params;
+    const { status } = req.body;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Check ownership
+    const productRes = await pool.query("SELECT seller_id, status FROM products WHERE id = $1", [id]);
+    if (productRes.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    
+    const product = productRes.rows[0];
+
+    if (parseInt(product.seller_id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied." });
+    }
+
+    // Restriction: Sellers cannot approve their own products if they were rejected or pending
+    // But they can probably mark as 'sold' or 'inactive'
+    // For now, let's allow it but we might want to restrict 'approved' status if we want admin control.
+    
+    const result = await pool.query(
+      "UPDATE products SET status = $1 WHERE id = $2 RETURNING *",
+      [status, id]
+    );
+
+    res.json({ message: "Status updated", product: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
