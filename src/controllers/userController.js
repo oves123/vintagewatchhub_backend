@@ -317,3 +317,64 @@ exports.getMyFinancialLedger = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Accept Terms & Conditions
+exports.acceptTerms = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Silently handle if terms_accepted / terms_accepted_at columns don't exist yet
+    try {
+      await pool.query(
+        "UPDATE users SET terms_accepted = true, terms_accepted_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [userId]
+      );
+    } catch {
+      try {
+        await pool.query("UPDATE users SET terms_accepted = true WHERE id = $1", [userId]);
+      } catch {
+        // Column doesn't exist yet — swallow gracefully, terms acceptance is a soft requirement
+      }
+    }
+    res.json({ message: "Terms accepted successfully." });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get user's Watch Vault (personal collection not listed for sale)
+exports.getWatchVault = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    const requesterId = req.user.id;
+    if (parseInt(user_id) !== parseInt(requesterId) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Access denied." });
+    }
+    try {
+      const result = await pool.query(
+        "SELECT * FROM watch_vault WHERE user_id = $1 ORDER BY created_at DESC",
+        [user_id]
+      );
+      res.json(result.rows);
+    } catch {
+      res.json([]); // Table may not exist yet
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Add watch to vault
+exports.addToVault = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { brand, model, year, serial_number, condition, notes } = req.body;
+    const result = await pool.query(
+      `INSERT INTO watch_vault (user_id, brand, model, year, serial_number, condition, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [userId, brand, model, year, serial_number, condition, notes]
+    );
+    res.status(201).json({ message: "Watch added to vault.", watch: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

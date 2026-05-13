@@ -38,6 +38,7 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // Visitor Logging Middleware — only log top-level page impressions, not every API call
+const pool = require("./config/db");
 const TRACKED_PATHS = ['/api/products', '/api/products/categories', '/api/products/brands'];
 app.use(async (req, res, next) => {
     if (req.method === 'GET' && TRACKED_PATHS.some(p => req.path === p || req.path.startsWith('/api/products/') && !req.path.includes('my-listings'))) {

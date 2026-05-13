@@ -171,7 +171,12 @@ exports.getTotalUnreadCount = async (req, res) => {
   try {
     const { userId } = req.params;
     const result = await pool.query(
-      "SELECT SUM(unread_count) as total FROM chats WHERE buyer_id = $1 OR seller_id = $1",
+      `SELECT COUNT(*) as total 
+       FROM messages m
+       JOIN chats c ON m.chat_id = c.id
+       WHERE (c.buyer_id = $1 OR c.seller_id = $1)
+         AND m.sender_id != $1
+         AND m.is_read = false`,
       [userId]
     );
     res.json({ total: parseInt(result.rows[0].total || 0) });
