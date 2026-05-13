@@ -57,7 +57,7 @@ exports.getUsers = async (req, res) => {
       SELECT 
         u.id, u.name, u.email, u.role, u.phone, u.city, u.state, u.pincode, u.profile_image, u.is_verified, u.joined_date, u.is_active, u.payment_methods,
         (SELECT COUNT(*) FROM products WHERE seller_id = u.id) as items_listed,
-        (SELECT COUNT(*) FROM orders WHERE buyer_id = u.id) as items_bought
+        (SELECT COUNT(*) FROM product_deals WHERE buyer_id = u.id) as items_bought
       FROM users u
       ORDER BY u.id DESC
     `;
@@ -750,12 +750,15 @@ exports.verifyPayment = async (req, res) => {
     }
 
     const result = await pool.query(
-      "UPDATE product_deals SET status = $1, payment_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'PAYMENT_SUBMITTED' RETURNING *",
-      [status === 'PAID' ? 'PAID' : 'ACCEPTED', id]
+      `UPDATE product_deals 
+       SET status = $1, payment_status = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3 AND status = 'PAID' 
+       RETURNING *`,
+      [status === 'PAID' ? 'PAID' : 'ACCEPTED', status === 'PAID' ? 'PAID' : 'PENDING', id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Deal not found or not in verification state" });
+      return res.status(404).json({ message: "Deal not found or not in PAID state awaiting verification" });
     }
 
     const deal = result.rows[0];
@@ -791,14 +794,7 @@ exports.verifyPayment = async (req, res) => {
         link: '/profile?tab=buying',
         channels: ['in_app', 'email', 'sms', 'whatsapp']
       });
-      
-      // We already reset status to 'ACCEPTED' and payment_status to 'ACCEPTED' in the UPDATE query if it was rejected.
-      // Wait, let's fix that update query to be more precise.
-      await pool.query(
-        "UPDATE product_deals SET payment_status = 'PENDING', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-        [id]
-      );
-    }
+    } // end else (REJECTED)
 
     await logAdminAction(adminId, `verify_payment_${status}`, 'deal', id, { status }, req.ip);
 

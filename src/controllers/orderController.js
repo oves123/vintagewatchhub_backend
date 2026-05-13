@@ -446,7 +446,7 @@ exports.markDealAsPaid = async (req, res) => {
     const { id } = req.params;
     const { payment_method } = req.body;
     const userId = req.user.id;
-    const receipt = req.file ? req.file.filename : null;
+    const receipt = req.file ? req.file.path : null; // .path = Cloudinary URL or absolute local path
 
     // 5. Update Deal Status
     const result = await client.query(
@@ -494,33 +494,36 @@ exports.markDealAsPaid = async (req, res) => {
 
 // Seller marks deal as SHIPPED
 exports.markShipped = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params; 
     const { seller_id, courier_name, tracking_number, is_insured } = req.body;
 
-    const dealCheck = await pool.query(
+    const dealCheck = await client.query(
       "SELECT * FROM product_deals WHERE id = $1 AND seller_id = $2 AND status = 'PAID'",
       [id, seller_id]
     );
     if (dealCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ message: 'Deal not found, not authorized, or payment not yet verified by Admin' });
     }
 
     const deal = dealCheck.rows[0];
     
-    // Validate tracking number length (min 8, max 25 chars)
     if (tracking_number && (tracking_number.length < 8 || tracking_number.length > 25)) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Invalid tracking number. Must be between 8 and 25 characters.' });
     }
 
     const packing_video = req.file ? req.file.path : null;
 
     if (!packing_video) {
-       return res.status(400).json({ message: "Packing video is mandatory." });
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "Packing video is mandatory." });
     }
 
-    // Update deal status to 'SHIPPED' or update details if already SHIPPED
-    await pool.query(
+    await client.query(
       `UPDATE product_deals 
        SET status = 'SHIPPED', 
            tracking_number = $1, 
@@ -533,15 +536,17 @@ exports.markShipped = async (req, res) => {
       [tracking_number || null, courier_name || 'Hand Delivery', packing_video, is_insured || false, id]
     );
 
-    // Update product status to 'sold' on the marketplace (removes from search)
-    await pool.query(
+    // Atomic: mark product sold in same transaction
+    await client.query(
       "UPDATE products SET status = 'sold' WHERE id = $1",
       [deal.product_id]
     );
 
+    await client.query('COMMIT');
+
     res.json({ message: 'Item marked as shipped. Buyer has been notified.' });
 
-    // Notify Buyer
+    // Fire-and-forget notifications after response
     try {
       const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
       await notificationService.createNotification({
@@ -554,10 +559,13 @@ exports.markShipped = async (req, res) => {
       });
     } catch (err) { console.error("Ship notification failed:", err.message); }
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ 
       error: "Internal server error", 
       message: "Shipping update failed: " + error.message 
     });
+  } finally {
+    client.release();
   }
 };
 
@@ -820,7 +828,7 @@ exports.uploadEvidence = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const files = req.files ? req.files.map(f => f.filename) : [];
+    const files = req.files ? req.files.map(f => f.path) : []; // f.path = Cloudinary URL from cloudUpload
 
     if (files.length === 0) return res.status(400).json({ message: "No files uploaded." });
 

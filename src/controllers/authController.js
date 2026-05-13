@@ -19,10 +19,16 @@ exports.register = async (req, res) => {
       [name, email, hashedPassword, phone, city, state, pincode, seller_type || 'individual_collector', gst_number || null, pan_number || null, gst_enrolment_id || null]
     );
 
+    const u = result.rows[0];
     res.json({
       message: "User registered successfully",
       user: {
-        ...result.rows[0],
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        seller_type: u.seller_type,
+        state: u.state,
         terms_accepted: false
       }
     });

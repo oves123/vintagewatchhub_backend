@@ -37,18 +37,17 @@ app.use(cors({
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
-// Visitor Logging Middleware
-const pool = require("./config/db");
+// Visitor Logging Middleware — only log top-level page impressions, not every API call
+const TRACKED_PATHS = ['/api/products', '/api/products/categories', '/api/products/brands'];
 app.use(async (req, res, next) => {
-    // Only log page hits, not static files or busy API endpoints if needed
-    // But for now, let's log everything to get an idea of traffic
-    if (req.method === 'GET' && !req.path.includes('.') && !req.path.includes('admin/stats')) {
+    if (req.method === 'GET' && TRACKED_PATHS.some(p => req.path === p || req.path.startsWith('/api/products/') && !req.path.includes('my-listings'))) {
         try {
             await pool.query(
                 "INSERT INTO visitor_logs (ip_address, user_agent) VALUES ($1, $2)",
                 [req.ip || req.connection.remoteAddress, req.get('User-Agent')]
             );
         } catch (err) {
+            // Non-critical — never block a request due to logging failure
             console.error("Visitor logging error:", err.message);
         }
     }

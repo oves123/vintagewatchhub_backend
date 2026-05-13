@@ -21,6 +21,12 @@ exports.placeBid = async (req, res) => {
 
     const product = productCheck.rows[0];
 
+    // Prevent sellers from bidding on their own listings
+    if (parseInt(user_id) === parseInt(product.seller_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: "You cannot bid on your own listing." });
+    }
+
     if (!product.allow_auction) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: "This product is not listed for auction" });
@@ -52,6 +58,18 @@ exports.placeBid = async (req, res) => {
     if (parseFloat(bid_amount) <= parseFloat(currentHighest)) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: `Bid must be higher than current highest bid of ₹${currentHighest}` });
+    }
+
+    // Fetch previous highest bidder BEFORE inserting new bid (for outbid notification)
+    let prevHighestBidderId = null;
+    if (product.current_bid && parseFloat(product.current_bid) > 0) {
+      const prevBidRes = await client.query(
+        "SELECT user_id FROM bids WHERE product_id = $1 ORDER BY bid_amount DESC LIMIT 1",
+        [product_id]
+      );
+      if (prevBidRes.rows.length > 0 && parseInt(prevBidRes.rows[0].user_id) !== parseInt(user_id)) {
+        prevHighestBidderId = prevBidRes.rows[0].user_id;
+      }
     }
 
     // 3. Insert the bid
@@ -118,6 +136,19 @@ exports.placeBid = async (req, res) => {
         link: `/products/${product_id}`
       });
     } catch (err) { console.error("Bid notification failed:", err.message); }
+
+    // 7. Notify outbid user
+    if (prevHighestBidderId) {
+      try {
+        await notificationService.createNotification({
+          user_id: prevHighestBidderId,
+          title: "You've Been Outbid! 🔔",
+          message: `Someone placed a higher bid of ₹${parseFloat(bid_amount).toLocaleString()} on "${product.title || 'Watch'}". Bid now to stay in the lead!`,
+          type: 'warning',
+          link: `/products/${product_id}`
+        });
+      } catch (err) { console.error("Outbid notification failed:", err.message); }
+    }
 
     res.json({
       message: isExtended ? "Bid placed and auction extended!" : "Bid placed successfully",

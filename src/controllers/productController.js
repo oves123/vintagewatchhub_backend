@@ -70,7 +70,7 @@ exports.createProduct = async (req, res) => {
     }
 
     if (status !== 'draft' && !hasVideo) {
-      return res.json({ message: "At least one video is mandatory for listing." });
+      return res.status(400).json({ error: "At least one video is mandatory for listing." });
     }
 
     // Auto-approve for verified sellers

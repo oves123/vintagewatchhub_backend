@@ -95,20 +95,19 @@ exports.getUserActivity = async (req, res) => {
       return res.status(403).json({ message: "Access denied." });
     }
 
-    // Fetch Buy Orders (Acquisitions)
+    // Fetch Buy Orders (Acquisitions) — from product_deals
     const buyOrders = await pool.query(
-      `SELECT o.*, p.title, p.image as product_thumbnail, p.images as product_images, u.name as seller_name, 
-       (SELECT id FROM reviews WHERE order_id = o.id AND user_id = $1 LIMIT 1) as review_id
-       FROM orders o 
+      `SELECT o.*, p.title, p.images as product_images, u.name as seller_name
+       FROM product_deals o 
        JOIN products p ON o.product_id = p.id 
        JOIN users u ON o.seller_id = u.id 
        WHERE o.buyer_id = $1 ORDER BY o.created_at DESC`, [id]
     );
 
-    // Fetch Sell Orders (Delivered/Sold)
+    // Fetch Sell Orders (Delivered/Sold) — from product_deals
     const sellOrders = await pool.query(
-      `SELECT o.*, p.title, p.image as product_thumbnail, p.images as product_images, u.name as buyer_name 
-       FROM orders o 
+      `SELECT o.*, p.title, p.images as product_images, u.name as buyer_name 
+       FROM product_deals o 
        JOIN products p ON o.product_id = p.id 
        JOIN users u ON o.buyer_id = u.id 
        WHERE o.seller_id = $1 ORDER BY o.created_at DESC`, [id]
