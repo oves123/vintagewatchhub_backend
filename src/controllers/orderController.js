@@ -54,7 +54,15 @@ exports.createAuctionWinnerOrder = async (req, res) => {
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
+      let scopeMsg;
+      if (!seller || !seller.state) {
+        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
+      } else if (!buyer || !buyer.state) {
+        scopeMsg = "Please complete your profile by adding your state before purchasing.";
+      } else {
+        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
+      }
+      return res.status(403).json({ message: scopeMsg });
     }
 
     const isVerified = seller && seller.is_verified;
@@ -191,7 +199,15 @@ exports.createOrder = async (req, res) => {
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
+      let scopeMsg;
+      if (!seller || !seller.state) {
+        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
+      } else if (!buyer || !buyer.state) {
+        scopeMsg = "Please complete your profile by adding your state before purchasing.";
+      } else {
+        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
+      }
+      return res.status(403).json({ message: scopeMsg });
     }
 
     const isVerified = seller && seller.is_verified;
@@ -310,7 +326,15 @@ exports.buyNowDirect = async (req, res) => {
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
+      let scopeMsg;
+      if (!seller || !seller.state) {
+        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
+      } else if (!buyer || !buyer.state) {
+        scopeMsg = "Please complete your profile by adding your state before purchasing.";
+      } else {
+        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
+      }
+      return res.status(403).json({ message: scopeMsg });
     }
 
     const isVerified = seller && seller.is_verified;

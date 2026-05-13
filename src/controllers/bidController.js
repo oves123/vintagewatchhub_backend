@@ -40,7 +40,15 @@ exports.placeBid = async (req, res) => {
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ message: `Shipping Restricted: This seller is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot place a bid on this item.` });
+      let scopeMsg;
+      if (!seller || !seller.state) {
+        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
+      } else if (!buyer || !buyer.state) {
+        scopeMsg = "Please complete your profile by adding your state before placing a bid.";
+      } else {
+        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can bid on this item.`;
+      }
+      return res.status(403).json({ message: scopeMsg });
     }
 
     if (new Date(product.auction_end) < new Date()) {
