@@ -27,7 +27,7 @@ router.post("/create", authMiddleware, orderController.createOrder);
 router.post("/buy-now", authMiddleware, orderController.buyNowDirect);
 
 router.get("/buyer/:user_id", authMiddleware, orderController.getBuyerOrders);
-router.get("/seller/:seller_id", authMiddleware, orderController.getSellerOrders);
+// getSellerOrders is deprecated — use /user-deals/:user_id instead
 router.get("/user-deals/:user_id", authMiddleware, orderController.getUserDeals);
 router.post("/:id/upload-evidence", authMiddleware, cloudUpload.array("evidence", 5), orderController.uploadEvidence);
 
