@@ -7,7 +7,7 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     await client.query('BEGIN');
     const { product_id } = req.body;
 
-    // 1. Lock product for update
+    // 1. Lock product for update and check if it exists
     const productResult = await client.query(`SELECT * FROM products WHERE id=$1 FOR UPDATE`, [product_id]);
     const product = productResult.rows[0];
     if (!product) {
@@ -16,7 +16,7 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     }
 
     // Check if a deal already exists
-    const dealCheck = await client.query("SELECT id FROM product_deals WHERE product_id = $1 AND status != 'CANCELLED'", [product_id]);
+    const dealCheck = await client.query("SELECT id FROM product_deals WHERE product_id = $1 AND status NOT IN ('CANCELLED', 'RETURNED', 'EXPIRED')", [product_id]);
     if (dealCheck.rows.length > 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: "A deal already exists for this auction winner" });
@@ -36,12 +36,15 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     const highestBid = bidResult.rows[0];
 
     // 3. Fetch platform settings and seller details
-    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
     const settings = {};
     settingsRes.rows.forEach(r => settings[r.key] = r.value);
+    
     const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
     const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
     const gstRate = parseFloat(settings.gst_rate || 18);
+    const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
+    const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
 
     const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [highestBid.user_id]);
     const buyer = buyerRes.rows[0];
@@ -55,7 +58,7 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     }
 
     const isVerified = seller && seller.is_verified;
-    const hoursToAdd = isVerified ? 48 : 72;
+    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
@@ -155,35 +158,44 @@ exports.getBuyerOrders = async (req, res) => {
 };
 
 exports.createOrder = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { product_id, buyer_id, seller_id, amount } = req.body;
 
     // 1. Get product and check if already has a deal
-    const productResult = await pool.query(`SELECT * FROM products WHERE id=$1`, [product_id]);
+    const productResult = await client.query(`SELECT * FROM products WHERE id=$1 FOR UPDATE`, [product_id]);
     const product = productResult.rows[0];
 
-    if (!product) return res.status(404).json({ message: "Product not found" });
+    if (!product) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: "Product not found" });
+    }
 
     // 2. Fetch platform settings and seller details
-    const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
     const settings = {};
     settingsRes.rows.forEach(r => settings[r.key] = r.value);
+    
     const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
     const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
     const gstRate = parseFloat(settings.gst_rate || 18);
+    const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
+    const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
 
-    const buyerRes = await pool.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
+    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
     const buyer = buyerRes.rows[0];
 
-    const sellerRes = await pool.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [seller_id]);
+    const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [seller_id]);
     const seller = sellerRes.rows[0];
 
     if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ message: `Shipping Restricted: This seller is an individual collector and is legally restricted to selling within their home state (${seller?.state || 'Unknown'}). You cannot purchase this item.` });
     }
 
     const isVerified = seller && seller.is_verified;
-    const hoursToAdd = isVerified ? 48 : 72;
+    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
@@ -205,7 +217,7 @@ exports.createOrder = async (req, res) => {
     const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
 
     // 3. Create Product Deal
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO product_deals (
         product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
         commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
@@ -222,7 +234,9 @@ exports.createOrder = async (req, res) => {
     );
 
     // 4. Update product status
-    await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+
+    await client.query('COMMIT');
 
     res.json({
       message: "Order created successfully. Please complete the payment.",
@@ -241,12 +255,13 @@ exports.createOrder = async (req, res) => {
       });
     } catch (err) { console.error("Order notification failed:", err.message); }
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
-exports.getSellerOrders = async (req, res) => {
-  // ... existing code (deprecated)
-};
+// getSellerOrders is deprecated. Use getUserDeals instead.
 
 // Direct Buy Now
 exports.buyNowDirect = async (req, res) => {
@@ -277,13 +292,15 @@ exports.buyNowDirect = async (req, res) => {
     const productPrice = parseFloat(product.buy_it_now_price || product.price);
     const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
     
-    // Fetch settings and seller
-    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
     const settings = {};
     settingsRes.rows.forEach(r => settings[r.key] = r.value);
+    
     const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
     const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
     const gstRate = parseFloat(settings.gst_rate || 18);
+    const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
+    const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
 
     const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
     const buyer = buyerRes.rows[0];
@@ -297,7 +314,7 @@ exports.buyNowDirect = async (req, res) => {
     }
 
     const isVerified = seller && seller.is_verified;
-    const hoursToAdd = isVerified ? 48 : 72;
+    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
@@ -337,7 +354,7 @@ exports.buyNowDirect = async (req, res) => {
       ]
     );
 
-    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
+    await client.query("UPDATE products SET status = 'sold' WHERE id = $1", [product_id]);
 
     await client.query('COMMIT');
 
@@ -433,8 +450,8 @@ exports.markDealAsPaid = async (req, res) => {
 
     // 5. Update Deal Status
     const result = await client.query(
-      "UPDATE product_deals SET status = 'PAID', payment_status = 'PAID', payment_receipt = $1, payment_method = 'DIRECT_TRANSFER', updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND buyer_id = $3 RETURNING *",
-      [receipt, id, userId]
+      "UPDATE product_deals SET status = 'PAID', payment_status = 'PAID', payment_receipt = $1, payment_method = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND buyer_id = $4 RETURNING *",
+      [receipt, payment_method || 'DIRECT_TRANSFER', id, userId]
     );
 
     if (result.rows.length === 0) {

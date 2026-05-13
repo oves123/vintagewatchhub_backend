@@ -7,7 +7,7 @@ exports.createOffer = async (req, res) => {
 
     // 1. Check if product allows offers
     const productCheck = await pool.query(
-      "SELECT allow_offers, status FROM products WHERE id = $1",
+      "SELECT allow_offers, status, shipping_scope FROM products WHERE id = $1",
       [product_id]
     );
 
@@ -15,13 +15,12 @@ exports.createOffer = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    // Temporarily disabled to allow offers on existing products without the flag
-    // if (!productCheck.rows[0].allow_offers) {
-    //   return res.status(400).json({ message: "This product does not accept offers" });
-    // }
+    const product = productCheck.rows[0];
+    if (!product.allow_offers) {
+       return res.status(400).json({ message: "This product does not accept offers" });
+    }
 
     // 1.5 Check Geographic Restrictions
-    const product = productCheck.rows[0];
     const buyerRes = await pool.query("SELECT state FROM users WHERE id = $1", [buyer_id]);
     const buyer = buyerRes.rows[0];
 
@@ -42,10 +41,13 @@ exports.createOffer = async (req, res) => {
       return res.status(400).json({ message: "You have reached the limit of 5 offers for this item." });
     }
 
-    // 3. Create offer with 48h expiry
+    // 3. Create offer with expiry from settings
+    const settingsRes = await pool.query("SELECT key, value FROM platform_settings WHERE key = 'offer_expiry_hours'");
+    const offerExpiryHours = parseInt(settingsRes.rows[0]?.value || 48);
+
     const newOfferCount = parseInt(limitCheck.rows[0].count) + 1;
     const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 48);
+    expiresAt.setHours(expiresAt.getHours() + offerExpiryHours);
     
     const result = await pool.query(
       `INSERT INTO product_offers (product_id, buyer_id, seller_id, amount, status, message, offer_count, expires_at)
@@ -115,19 +117,22 @@ exports.respondToOffer = async (req, res) => {
         );
 
         // 3. Fetch platform settings and seller details for calculations
-        const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate')");
+        const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
         const settings = {};
         settingsRes.rows.forEach(r => settings[r.key] = r.value);
+        
         const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
         const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
         const gstRate = parseFloat(settings.gst_rate || 18);
+        const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
+        const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
 
         const sellerRes = await client.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
         const seller = sellerRes.rows[0];
 
         // 4. Set expiry (SHIPMENT WINDOW)
         const isVerified = seller && seller.is_verified;
-        const hoursToAdd = isVerified ? 48 : 72;
+        const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
         
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
