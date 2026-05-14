@@ -91,7 +91,7 @@ exports.respondToOffer = async (req, res) => {
     }
     const oldOffer = currentRes.rows[0];
 
-    if (oldOffer.status !== 'pending' && oldOffer.status !== 'countered') {
+    if (oldOffer.status !== 'pending' && oldOffer.status !== 'countered' && oldOffer.status !== 'buyer_countered') {
        await client.query('ROLLBACK');
        return res.status(400).json({ message: `Offer is already ${oldOffer.status}` });
     }
@@ -99,7 +99,7 @@ exports.respondToOffer = async (req, res) => {
     // 2. Update offer status
     const result = await client.query(
       `UPDATE product_offers 
-       SET status = $1, counter_amount = $2, updated_at = CURRENT_TIMESTAMP
+       SET status = $1, counter_amount = $2
        WHERE id = $3 
        RETURNING *`,
       [status, status === 'countered' ? counter_amount : oldOffer.counter_amount, id]

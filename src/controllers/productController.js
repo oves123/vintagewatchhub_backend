@@ -334,6 +334,37 @@ exports.getMyListings = async (req, res) => {
   }
 };
 
+// Public endpoint — returns only approved listings for a seller (no auth required)
+exports.getSellerListings = async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+    const result = await pool.query(
+      `SELECT products.*, categories.name as category_name,
+              users.is_verified AS seller_verified,
+              (SELECT COUNT(*) FROM watchlist WHERE product_id = products.id) as watchlist_count
+       FROM products
+       LEFT JOIN categories ON products.category_id = categories.id
+       LEFT JOIN users ON products.seller_id = users.id
+       WHERE products.seller_id = $1
+         AND products.status IN ('approved', 'under_offer')
+       ORDER BY products.id DESC`,
+      [sellerId]
+    );
+    const products = result.rows.map(resObj => {
+      if (resObj.images && typeof resObj.images === 'string') {
+        try { resObj.images = JSON.parse(resObj.images); } catch(e) { resObj.images = []; }
+      }
+      if (resObj.item_specifics && typeof resObj.item_specifics === 'string') {
+        try { resObj.item_specifics = JSON.parse(resObj.item_specifics); } catch(e) { resObj.item_specifics = {}; }
+      }
+      return resObj;
+    });
+    res.json(products);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getProducts = async (req, res) => {
   try {
     const { search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type } = req.query;
