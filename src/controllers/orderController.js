@@ -22,6 +22,11 @@ exports.createAuctionWinnerOrder = async (req, res) => {
       return res.status(400).json({ message: "A deal already exists for this auction winner" });
     }
 
+    if (new Date(product.auction_end) > new Date()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "Auction is still live. Cannot create winner order yet." });
+    }
+
     // 2. Get highest bid
     const bidResult = await client.query(
       `SELECT * FROM bids WHERE product_id=$1 ORDER BY bid_amount DESC LIMIT 1`,
@@ -34,6 +39,11 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     }
 
     const highestBid = bidResult.rows[0];
+
+    if (product.reserve_price && parseFloat(highestBid.bid_amount) < parseFloat(product.reserve_price)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "Reserve price not met. Auction closed with no winner." });
+    }
 
     // 3. Fetch platform settings and seller details
     const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
@@ -169,7 +179,8 @@ exports.createOrder = async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { product_id, buyer_id, seller_id, amount } = req.body;
+    const { product_id, amount } = req.body;
+    const buyer_id = req.user.id;
 
     // 1. Get product and check if already has a deal
     const productResult = await client.query(`SELECT * FROM products WHERE id=$1 FOR UPDATE`, [product_id]);
@@ -179,6 +190,8 @@ exports.createOrder = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: "Product not found" });
     }
+
+    const seller_id = product.seller_id;
 
     // 2. Fetch platform settings and seller details
     const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
@@ -284,7 +297,8 @@ exports.buyNowDirect = async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { product_id, buyer_id } = req.body;
+    const { product_id } = req.body;
+    const buyer_id = req.user.id;
 
     // 1. Lock the product record for update to prevent race conditions
     const productRes = await client.query("SELECT * FROM products WHERE id = $1 FOR UPDATE", [product_id]);
@@ -303,6 +317,15 @@ exports.buyNowDirect = async (req, res) => {
     if (!product.allow_buy_now && !product.buy_it_now_price) {
        await client.query('ROLLBACK');
        return res.status(400).json({ message: "Buy Now is not available for this item" });
+    }
+
+    // 3. Check if there are existing bids. If yes, Buy Now is disabled.
+    if (product.allow_auction) {
+       const bidsRes = await client.query("SELECT id FROM bids WHERE product_id = $1 LIMIT 1", [product_id]);
+       if (bidsRes.rows.length > 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ message: "Buy Now is no longer available because bids have been placed on this item." });
+       }
     }
 
     const productPrice = parseFloat(product.buy_it_now_price || product.price);
@@ -378,7 +401,7 @@ exports.buyNowDirect = async (req, res) => {
       ]
     );
 
-    await client.query("UPDATE products SET status = 'sold' WHERE id = $1", [product_id]);
+    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
 
     await client.query('COMMIT');
 
@@ -484,9 +507,13 @@ exports.markDealAsPaid = async (req, res) => {
     }
 
     // 6. Log to Financial Ledger
+    const dealRow = result.rows[0];
+    const buyerGst = dealRow.buyer_commission_amount > 0 ? dealRow.platform_gst_amount * (parseFloat(dealRow.buyer_commission_amount) / (parseFloat(dealRow.seller_commission_amount) + parseFloat(dealRow.buyer_commission_amount))) : 0;
+    const totalBuyerCost = parseFloat(dealRow.amount) + parseFloat(dealRow.shipping_fee || 0) + parseFloat(dealRow.buyer_commission_amount || 0) + parseFloat(buyerGst || 0);
+
     await client.query(
       "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status, metadata) VALUES ($1, $2, $3, 'PAYMENT', 'RECEIVED', $4)",
-      [id, result.rows[0].buyer_id, result.rows[0].amount, JSON.stringify({ method: 'DIRECT_TRANSFER' })]
+      [id, dealRow.buyer_id, totalBuyerCost, JSON.stringify({ method: 'DIRECT_TRANSFER' })]
     );
 
     await client.query('COMMIT');
@@ -522,7 +549,8 @@ exports.markShipped = async (req, res) => {
   try {
     await client.query('BEGIN');
     const { id } = req.params; 
-    const { seller_id, courier_name, tracking_number, is_insured } = req.body;
+    const seller_id = req.user.id;
+    const { courier_name, tracking_number, is_insured } = req.body;
 
     const dealCheck = await client.query(
       "SELECT * FROM product_deals WHERE id = $1 AND seller_id = $2 AND status = 'PAID'",
@@ -597,7 +625,7 @@ exports.markShipped = async (req, res) => {
 exports.markDelivered = async (req, res) => {
   try {
     const { id } = req.params;
-    const { seller_id } = req.body;
+    const seller_id = req.user.id;
 
     const result = await pool.query(
       "UPDATE product_deals SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND seller_id = $2 AND status = 'SHIPPED' RETURNING *",
@@ -629,7 +657,7 @@ exports.markDelivered = async (req, res) => {
 exports.confirmReceived = async (req, res) => {
   try {
     const { id } = req.params;
-    const { buyer_id } = req.body;
+    const buyer_id = req.user.id;
 
     const result = await pool.query(
       "UPDATE product_deals SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND buyer_id = $2 AND status = 'SHIPPED' RETURNING *",
@@ -647,7 +675,7 @@ exports.confirmReceived = async (req, res) => {
 exports.confirmSale = async (req, res) => {
   try {
     const { id } = req.params; 
-    const { buyer_id } = req.body;
+    const buyer_id = req.user.id;
     const unboxing_video = req.file ? req.file.path : null;
 
     const result = await pool.query(
@@ -698,7 +726,8 @@ exports.confirmSale = async (req, res) => {
 exports.cancelDeal = async (req, res) => {
   try {
     const { id } = req.params;
-    const { user_id, reason } = req.body;
+    const user_id = req.user.id;
+    const { reason } = req.body;
 
     // Verify ownership and ensure it's still in a cancellable state
     // Cancellable states: 

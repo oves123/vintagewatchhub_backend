@@ -3,11 +3,12 @@ const pool = require("../config/db");
 // Create a new offer
 exports.createOffer = async (req, res) => {
   try {
-    const { product_id, buyer_id, seller_id, amount, message } = req.body;
+    const { product_id, amount, message } = req.body;
+    const buyer_id = req.user.id;
 
     // 1. Check if product allows offers
     const productCheck = await pool.query(
-      "SELECT allow_offers, status, shipping_scope FROM products WHERE id = $1",
+      "SELECT allow_offers, status, shipping_scope, seller_id FROM products WHERE id = $1",
       [product_id]
     );
 
@@ -16,6 +17,8 @@ exports.createOffer = async (req, res) => {
     }
 
     const product = productCheck.rows[0];
+    const seller_id = product.seller_id;
+
     if (!product.allow_offers) {
        return res.status(400).json({ message: "This product does not accept offers" });
     }
@@ -91,6 +94,12 @@ exports.respondToOffer = async (req, res) => {
     }
     const oldOffer = currentRes.rows[0];
 
+    // Authorization Check: Must be the buyer, seller, or admin to interact with the offer
+    if (parseInt(req.user.id) !== parseInt(oldOffer.buyer_id) && parseInt(req.user.id) !== parseInt(oldOffer.seller_id) && req.user.role !== 'admin') {
+       await client.query('ROLLBACK');
+       return res.status(403).json({ message: "Access denied. You are not a party to this offer." });
+    }
+
     if (oldOffer.status !== 'pending' && oldOffer.status !== 'countered' && oldOffer.status !== 'buyer_countered') {
        await client.query('ROLLBACK');
        return res.status(400).json({ message: `Offer is already ${oldOffer.status}` });
@@ -102,7 +111,7 @@ exports.respondToOffer = async (req, res) => {
        SET status = $1, counter_amount = $2
        WHERE id = $3 
        RETURNING *`,
-      [status, status === 'countered' ? counter_amount : oldOffer.counter_amount, id]
+      [status, (status === 'countered' || status === 'buyer_countered') ? counter_amount : oldOffer.counter_amount, id]
     );
 
     const offer = result.rows[0];
@@ -145,8 +154,12 @@ exports.respondToOffer = async (req, res) => {
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
-        // Use counter_amount if it was a counter-offer being accepted, otherwise use original amount
-        const finalAmount = parseFloat(oldOffer.status === 'countered' ? oldOffer.counter_amount : offer.amount);
+        // Use counter_amount if it was a counter-offer being accepted (by either party), otherwise use original buyer amount
+        const finalAmount = parseFloat(
+          (oldOffer.status === 'countered' || oldOffer.status === 'buyer_countered')
+            ? oldOffer.counter_amount
+            : offer.amount
+        );
         const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
 
         // 5. Calculations

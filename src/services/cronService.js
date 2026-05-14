@@ -3,6 +3,38 @@ const pool = require('../config/db');
 
 const cronService = {
   init: () => {
+    // Run every 30 minutes — clean up expired ACCEPTED deals (unpaid)
+    cron.schedule('*/30 * * * *', async () => {
+      console.log('🧹 Running automated unpaid deal cleanup...');
+      try {
+        const expiredDeals = await pool.query(`
+          UPDATE product_deals 
+          SET status = 'EXPIRED' 
+          WHERE status = 'ACCEPTED' AND expires_at < CURRENT_TIMESTAMP
+          RETURNING product_id
+        `);
+
+        if (expiredDeals.rows.length > 0) {
+          console.log(`⏳ Expired ${expiredDeals.rows.length} unpaid deals.`);
+          const productIds = [...new Set(expiredDeals.rows.map(r => r.product_id))];
+          for (const pid of productIds) {
+            await pool.query(`
+              UPDATE products 
+              SET status = 'approved',
+                  auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+              WHERE id = $1 AND status = 'under_offer'
+              AND NOT EXISTS (
+                SELECT 1 FROM product_deals 
+                WHERE product_id = $1 AND status IN ('ACCEPTED', 'SHIPPED', 'DELIVERED')
+              )
+            `, [pid]);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Cron unpaid deal cleanup failed:', error.message);
+      }
+    });
+
     // Run every hour — auto-confirm DELIVERED deals after payout window
     cron.schedule('0 * * * *', async () => {
       console.log('🚀 Running automated deal auto-confirmation...');
@@ -76,6 +108,13 @@ const cronService = {
 
             const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [row.product_id]);
             const product = productRes.rows[0];
+            
+            if (product.reserve_price && parseFloat(winBid.bid_amount) < parseFloat(product.reserve_price)) {
+              await pool.query("UPDATE products SET status = 'expired' WHERE id = $1", [row.product_id]);
+              console.log(`⚠️ Auction expired for product ${row.product_id} - Reserve price not met`);
+              continue;
+            }
+
             const sellerRes = await pool.query("SELECT * FROM users WHERE id = $1", [product.seller_id]);
             const seller = sellerRes.rows[0];
 

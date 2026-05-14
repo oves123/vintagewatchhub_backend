@@ -245,7 +245,11 @@ exports.updateProductStatus = async (req, res) => {
     }
 
     const result = await pool.query(
-      "UPDATE products SET status=$1, rejection_reason=$2 WHERE id=$3", 
+      `UPDATE products 
+       SET status=$1, 
+           rejection_reason=$2,
+           auction_end = CASE WHEN $1 = 'approved' AND allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '7 days' ELSE auction_end END
+       WHERE id=$3 RETURNING *`, 
       [status, status === 'rejected' ? reason : null, id]
     );
     
@@ -432,9 +436,14 @@ exports.resolveDeal = async (req, res) => {
 
     if (result.rowCount === 0) return res.status(404).json({ error: "Deal not found" });
 
-    // If cancelled, reset product to approved
+    // If cancelled, reset product to approved and extend auction if needed
     if (status === 'CANCELLED') {
-        await pool.query("UPDATE products SET status = 'approved' WHERE id = $1", [result.rows[0].product_id]);
+        await pool.query(`
+          UPDATE products 
+          SET status = 'approved',
+              auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+          WHERE id = $1`, [result.rows[0].product_id]
+        );
     }
 
     await logAdminAction(req.user.id, `resolve_deal_${status}`, 'deal', id, { status, resolution_notes }, req.ip);
@@ -663,6 +672,12 @@ exports.releasePayout = async (req, res) => {
       });
     } catch (err) { console.error("Payout notification failed:", err.message); }
 
+    // Log payout to ledger
+    await pool.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
+      [deal.id, deal.seller_id, deal.seller_payout]
+    );
+
     await logAdminAction(adminId, 'release_payout', 'deal', id, { amount: deal.seller_payout }, req.ip);
 
     res.json({ message: 'Payout released successfully', deal: result.rows[0] });
@@ -828,10 +843,12 @@ exports.processRefund = async (req, res) => {
       [id]
     );
 
-    // 3. Reactivate the product for the marketplace
-    await pool.query(
-      "UPDATE products SET status = 'approved' WHERE id = $1",
-      [deal.product_id]
+    // 3. Reactivate the product for the marketplace and extend auction if needed
+    await pool.query(`
+      UPDATE products 
+      SET status = 'approved',
+          auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+      WHERE id = $1`, [deal.product_id]
     );
 
     // 4. Log the admin action

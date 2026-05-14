@@ -4,11 +4,11 @@ const notificationService = require("../services/notificationService");
 
 exports.createProduct = async (req, res) => {
   try {
+    const seller_id = req.user.id;
     const {
       title,
       description,
       price,
-      seller_id,
       category_id,
       product_type,
       condition_code,
@@ -61,7 +61,7 @@ exports.createProduct = async (req, res) => {
     } else {
       images = Object.values(fileMap);
     }
-    const hasVideo = images.some(img => img.match(/\.(mp4|mov|webm|quicktime|avi|mkv)$/i));
+    const hasVideo = req.files && req.files.some(f => f.mimetype && f.mimetype.startsWith('video/'));
 
     const isTrue = (v) => v === true || v === 'true';
     const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;

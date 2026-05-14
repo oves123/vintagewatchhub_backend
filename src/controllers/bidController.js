@@ -6,7 +6,8 @@ exports.placeBid = async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { product_id, user_id, bid_amount } = req.body;
+    const { product_id, bid_amount } = req.body;
+    const user_id = req.user.id; // Get authenticated user ID instead of body
 
     // 1. Check if product allows auctions
     const productCheck = await client.query(
@@ -30,6 +31,11 @@ exports.placeBid = async (req, res) => {
     if (!product.allow_auction) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: "This product is not listed for auction" });
+    }
+
+    if (!['approved', 'active'].includes(product.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: "This item is no longer available for bidding." });
     }
 
     const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [user_id]);
@@ -63,9 +69,10 @@ exports.placeBid = async (req, res) => {
     }
 
     const currentHighest = product.current_bid || 0;
-    if (parseFloat(bid_amount) <= parseFloat(currentHighest)) {
+    const minBidIncrement = 100;
+    if (parseFloat(bid_amount) < (parseFloat(currentHighest) + minIncrement)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ message: `Bid must be higher than current highest bid of ₹${currentHighest}` });
+      return res.status(400).json({ message: `Bid must be at least ₹${parseFloat(currentHighest) + minIncrement} (₹${minIncrement} minimum increment)` });
     }
 
     // Fetch previous highest bidder BEFORE inserting new bid (for outbid notification)
@@ -180,7 +187,7 @@ exports.getBidHistory = async (req, res) => {
     const result = await pool.query(
       `SELECT 
           b.*, 
-          u.name as user_name, 
+          CASE WHEN b.user_id = req.user?.id THEN u.name ELSE CONCAT(LEFT(u.name, 3), '***') END as user_name, 
           u.profile_image, 
           u.rating,
           (SELECT COUNT(*) FROM product_deals WHERE seller_id = u.id AND status = 'CONFIRMED') as total_sold,
@@ -189,7 +196,7 @@ exports.getBidHistory = async (req, res) => {
        FROM bids b
        JOIN users u ON b.user_id = u.id 
        WHERE b.product_id = $1 
-       ORDER BY b.bid_amount DESC`,
+       ORDER BY b.bid_amount DESC, b.created_at DESC`,
       [productId]
     );
     res.json(result.rows);
