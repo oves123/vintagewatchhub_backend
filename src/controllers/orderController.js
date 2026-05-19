@@ -508,7 +508,10 @@ exports.markDealAsPaid = async (req, res) => {
 
     // 6. Log to Financial Ledger
     const dealRow = result.rows[0];
-    const buyerGst = dealRow.buyer_commission_amount > 0 ? dealRow.platform_gst_amount * (parseFloat(dealRow.buyer_commission_amount) / (parseFloat(dealRow.seller_commission_amount) + parseFloat(dealRow.buyer_commission_amount))) : 0;
+    const divisor = parseFloat(dealRow.seller_commission_amount || 0) + parseFloat(dealRow.buyer_commission_amount || 0);
+    const buyerGst = (dealRow.buyer_commission_amount > 0 && divisor > 0)
+      ? dealRow.platform_gst_amount * (parseFloat(dealRow.buyer_commission_amount) / divisor)
+      : 0;
     const totalBuyerCost = parseFloat(dealRow.amount) + parseFloat(dealRow.shipping_fee || 0) + parseFloat(dealRow.buyer_commission_amount || 0) + parseFloat(buyerGst || 0);
 
     await client.query(

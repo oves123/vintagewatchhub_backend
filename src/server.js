@@ -37,11 +37,11 @@ app.use(cors({
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
-// Visitor Logging Middleware — only log top-level page impressions, not every API call
+// Visitor Logging Middleware — only log individual product page views, not every API call
 const pool = require("./config/db");
-const TRACKED_PATHS = ['/api/products', '/api/products/categories', '/api/products/brands'];
+const PRODUCT_DETAIL_REGEX = /^\/api\/products\/\d+$/;
 app.use(async (req, res, next) => {
-    if (req.method === 'GET' && TRACKED_PATHS.some(p => req.path === p || req.path.startsWith('/api/products/') && !req.path.includes('my-listings'))) {
+    if (req.method === 'GET' && PRODUCT_DETAIL_REGEX.test(req.path)) {
         try {
             await pool.query(
                 "INSERT INTO visitor_logs (ip_address, user_agent) VALUES ($1, $2)",

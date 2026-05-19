@@ -171,7 +171,8 @@ exports.getWatchVault = async (req, res) => {
 
 exports.addToVault = async (req, res) => {
   try {
-    const { user_id, watch_name, brand, year, image_url } = req.body;
+    const { watch_name, brand, year, image_url } = req.body;
+    const user_id = req.user.id; // Enforce authenticated user ID to prevent IDOR/BOLA
     const result = await pool.query(
       "INSERT INTO watch_vault (user_id, watch_name, brand, year, image_url) VALUES ($1, $2, $3, $4, $5) RETURNING *",
       [user_id, watch_name, brand, year, image_url]

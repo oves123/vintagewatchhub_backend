@@ -20,8 +20,10 @@ exports.register = async (req, res) => {
     );
 
     const u = result.rows[0];
+    const token = jwt.sign({ id: u.id, role: u.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
     res.json({
       message: "User registered successfully",
+      token,
       user: {
         id: u.id,
         name: u.name,

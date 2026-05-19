@@ -369,9 +369,12 @@ exports.getProducts = async (req, res) => {
   try {
     const { search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type } = req.query;
 
-    let query = `
-      SELECT products.*, categories.name AS category_name,
-             users.is_verified AS seller_verified, users.seller_badge
+    // Pagination
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 24));
+    const offset = (page - 1) * limit;
+
+    let baseWhere = `
       FROM products
       LEFT JOIN categories ON products.category_id = categories.id
       LEFT JOIN users ON products.seller_id = users.id
@@ -381,27 +384,27 @@ exports.getProducts = async (req, res) => {
 
     if (search) {
       params.push(`%${search}%`);
-      query += ` AND (products.title ILIKE $${params.length} OR products.description ILIKE $${params.length})`;
+      baseWhere += ` AND (products.title ILIKE $${params.length} OR products.description ILIKE $${params.length})`;
     }
 
     if (category) {
       params.push(category);
-      query += ` AND categories.name ILIKE $${params.length}`;
+      baseWhere += ` AND categories.name ILIKE $${params.length}`;
     }
 
     if (brand) {
       params.push(brand);
-      query += ` AND products.item_specifics->>'brand' ILIKE $${params.length}`;
+      baseWhere += ` AND products.item_specifics->>'brand' ILIKE $${params.length}`;
     }
 
     if (minPrice) {
       params.push(minPrice);
-      query += ` AND products.price >= $${params.length}`;
+      baseWhere += ` AND products.price >= $${params.length}`;
     }
 
     if (maxPrice) {
       params.push(maxPrice);
-      query += ` AND products.price <= $${params.length}`;
+      baseWhere += ` AND products.price <= $${params.length}`;
     }
 
     if (condition) {
@@ -410,7 +413,7 @@ exports.getProducts = async (req, res) => {
         params.push(c);
         return `$${params.length}`;
       });
-      query += ` AND products.condition_code IN (${conditionPlaceholders.join(', ')})`;
+      baseWhere += ` AND products.condition_code IN (${conditionPlaceholders.join(', ')})`;
     }
 
     if (format) {
@@ -419,26 +422,30 @@ exports.getProducts = async (req, res) => {
         params.push(f);
         return `$${params.length}`;
       });
-      query += ` AND products.product_type IN (${formatPlaceholders.join(', ')})`;
+      baseWhere += ` AND products.product_type IN (${formatPlaceholders.join(', ')})`;
     }
 
     if (strap_type) {
       params.push(strap_type);
-      query += ` AND products.condition_details->>'strap_type' = $${params.length}`;
+      baseWhere += ` AND products.condition_details->>'strap_type' = $${params.length}`;
     }
 
-    if (sort === "lowest_price") {
-      query += ` ORDER BY products.price ASC`;
-    } else if (sort === "highest_price") {
-      query += ` ORDER BY products.price DESC`;
-    } else if (sort === "ending_soon") {
-      query += ` ORDER BY products.id ASC`; 
-    } else {
-      query += ` ORDER BY products.id DESC`;
-    }
+    // Run count and data queries in parallel
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) ${baseWhere}`, params),
+      pool.query(
+        `SELECT products.*, categories.name AS category_name,
+                users.is_verified AS seller_verified, users.seller_badge
+         ${baseWhere}
+         ${sort === "lowest_price"  ? "ORDER BY products.price ASC"
+         : sort === "highest_price" ? "ORDER BY products.price DESC"
+         : "ORDER BY products.id DESC"}
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      )
+    ]);
 
-    const result = await pool.query(query, params);
-
+    const total = parseInt(countResult.rows[0].count);
     const products = result.rows.map(resObj => {
       if (resObj.images && typeof resObj.images === 'string') {
         try { resObj.images = JSON.parse(resObj.images); } catch(e) { resObj.images = []; }
@@ -449,7 +456,7 @@ exports.getProducts = async (req, res) => {
       return resObj;
     });
 
-    res.json(products);
+    res.json({ products, total, page, limit, pages: Math.ceil(total / limit) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

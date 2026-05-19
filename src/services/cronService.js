@@ -88,13 +88,14 @@ const cronService = {
         `);
 
         for (const row of endedAuctions.rows) {
+          const txClient = await pool.connect();
           try {
             // Get highest bid
             const bidRes = await pool.query(
               "SELECT * FROM bids WHERE product_id = $1 ORDER BY bid_amount DESC LIMIT 1",
               [row.product_id]
             );
-            if (bidRes.rows.length === 0) continue;
+            if (bidRes.rows.length === 0) { txClient.release(); continue; }
             const winBid = bidRes.rows[0];
 
             // Get platform settings
@@ -112,6 +113,7 @@ const cronService = {
             if (product.reserve_price && parseFloat(winBid.bid_amount) < parseFloat(product.reserve_price)) {
               await pool.query("UPDATE products SET status = 'expired' WHERE id = $1", [row.product_id]);
               console.log(`⚠️ Auction expired for product ${row.product_id} - Reserve price not met`);
+              txClient.release();
               continue;
             }
 
@@ -120,15 +122,24 @@ const cronService = {
 
             const price = parseFloat(winBid.bid_amount);
             const shippingFee = product.shipping_type === 'fixed' ? parseFloat(product.shipping_fee || 0) : 0;
-            const sellerCommAmt = price * (sellerComm / 100);
-            const buyerCommAmt = price * (buyerComm / 100);
-            const platformGst = (sellerCommAmt + buyerCommAmt) * (gst / 100);
-            const totalFee = sellerCommAmt + buyerCommAmt + platformGst;
-            const tcsAmt = seller?.gst_number ? price * 0.01 : 0;
-            const payout = (price - sellerCommAmt - (sellerCommAmt * (gst / 100)) - tcsAmt) + shippingFee;
+
+            // Use shared calculator — single source of truth for payout math
+            const { sellerCommAmt, buyerCommAmt, platformGst, totalFee, tcsRate, tcsAmt, sellerPayout } =
+              require('../utils/commissionCalculator').calculateDealFinancials({
+                price,
+                shippingFee,
+                sellerCommRate: sellerComm,
+                buyerCommRate: buyerComm,
+                gstRate: gst,
+                hasGst: !!seller?.gst_number,
+              });
+
             const expiresAt = new Date(Date.now() + window * 3600000);
 
-            await pool.query(
+            // ─── ATOMIC TRANSACTION ──────────────────────────────────────────────
+            await txClient.query('BEGIN');
+
+            await txClient.query(
               `INSERT INTO product_deals (
                 product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
                 commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
@@ -137,17 +148,22 @@ const cronService = {
               ) VALUES ($1,$2,$3,$4,$5,$6,'ACCEPTED',$7,$8,$9,$10,$11,$12,$13,$14,'PENDING',$15,$16,$17,$18,$19,$20)`,
               [
                 row.product_id, winBid.user_id, product.seller_id, price, shippingFee, product.shipping_type, expiresAt,
-                sellerComm, sellerCommAmt, platformGst, totalFee, payout,
+                sellerComm, sellerCommAmt, platformGst, totalFee, sellerPayout,
                 seller?.seller_type === 'business_seller', seller?.gst_number,
-                seller?.gst_number ? 1.0 : 0, tcsAmt,
+                tcsRate, tcsAmt,
                 buyerComm, buyerCommAmt, sellerComm, sellerCommAmt
               ]
             );
 
-            await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [row.product_id]);
+            await txClient.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [row.product_id]);
+
+            await txClient.query('COMMIT');
             console.log(`🏆 Auction winner deal created for product ${row.product_id}`);
           } catch (err) {
+            await txClient.query('ROLLBACK');
             console.error(`❌ Auction finalization failed for product ${row.product_id}:`, err.message);
+          } finally {
+            txClient.release();
           }
         }
       } catch (error) {

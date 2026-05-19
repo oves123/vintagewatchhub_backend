@@ -70,9 +70,9 @@ exports.placeBid = async (req, res) => {
 
     const currentHighest = product.current_bid || 0;
     const minBidIncrement = 100;
-    if (parseFloat(bid_amount) < (parseFloat(currentHighest) + minIncrement)) {
+    if (parseFloat(bid_amount) < (parseFloat(currentHighest) + minBidIncrement)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ message: `Bid must be at least ₹${parseFloat(currentHighest) + minIncrement} (₹${minIncrement} minimum increment)` });
+      return res.status(400).json({ message: `Bid must be at least ₹${parseFloat(currentHighest) + minBidIncrement} (₹${minBidIncrement} minimum increment)` });
     }
 
     // Fetch previous highest bidder BEFORE inserting new bid (for outbid notification)
@@ -187,7 +187,7 @@ exports.getBidHistory = async (req, res) => {
     const result = await pool.query(
       `SELECT 
           b.*, 
-          CASE WHEN b.user_id = req.user?.id THEN u.name ELSE CONCAT(LEFT(u.name, 3), '***') END as user_name, 
+          CASE WHEN b.user_id = $2 THEN u.name ELSE CONCAT(LEFT(u.name, 3), '***') END as user_name, 
           u.profile_image, 
           u.rating,
           (SELECT COUNT(*) FROM product_deals WHERE seller_id = u.id AND status = 'CONFIRMED') as total_sold,
@@ -197,7 +197,7 @@ exports.getBidHistory = async (req, res) => {
        JOIN users u ON b.user_id = u.id 
        WHERE b.product_id = $1 
        ORDER BY b.bid_amount DESC, b.created_at DESC`,
-      [productId]
+      [productId, req.user?.id || null]
     );
     res.json(result.rows);
   } catch (error) {
