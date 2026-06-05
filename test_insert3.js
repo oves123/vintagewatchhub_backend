@@ -1,0 +1,1 @@
+const { Pool } = require('pg'); const pool = new Pool({ connectionString: 'postgresql://postgres.wevuqkzmkisnalfjnwhm:oves400102%40123@aws-1-ap-south-1.pooler.supabase.com:5432/postgres' }); pool.query('INSERT INTO watchlist (user_id, product_id, folder_id) VALUES (14, 27, null)').then(res => { console.log('INSERTED'); process.exit(0); }).catch(console.error);

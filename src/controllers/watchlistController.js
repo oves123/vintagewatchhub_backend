@@ -4,10 +4,19 @@ exports.addToWatchlist = async (req, res) => {
   try {
     const user_id = req.user.id;
     const { product_id, folder_id } = req.body;
-    const result = await pool.query(
-      "INSERT INTO watchlist (user_id, product_id, folder_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, product_id) DO UPDATE SET folder_id = $3 RETURNING *",
-      [user_id, product_id, folder_id || null]
-    );
+    const check = await pool.query("SELECT id FROM watchlist WHERE user_id = $1 AND product_id = $2", [user_id, product_id]);
+    let result;
+    if (check.rows.length > 0) {
+      result = await pool.query(
+        "UPDATE watchlist SET folder_id = $1 WHERE id = $2 RETURNING *",
+        [folder_id || null, check.rows[0].id]
+      );
+    } else {
+      result = await pool.query(
+        "INSERT INTO watchlist (user_id, product_id, folder_id) VALUES ($1, $2, $3) RETURNING *",
+        [user_id, product_id, folder_id || null]
+      );
+    }
     res.json({ message: "Added to watchlist", item: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -1,0 +1,1 @@
+const { Pool } = require('pg'); const pool = new Pool({ connectionString: 'postgresql://postgres.wevuqkzmkisnalfjnwhm:oves400102%40123@aws-1-ap-south-1.pooler.supabase.com:5432/postgres' }); pool.query('SELECT user_id FROM watchlist').then(res => { console.log(res.rows); process.exit(0); }).catch(console.error);
