@@ -35,18 +35,31 @@ const cronService = {
       }
     });
 
-    // Run every hour — auto-confirm DELIVERED deals after payout window
+    // Run every hour — auto-confirm DELIVERED deals and auto-deliver SHIPPED deals
     cron.schedule('0 * * * *', async () => {
-      console.log('🚀 Running automated deal auto-confirmation...');
+      console.log('🚀 Running automated deal auto-confirmation and auto-delivery...');
       try {
+        // 1. Auto-Delivered Logic (SHIPPED -> DELIVERED after 5 days if no action)
+        const autoDelivered = await pool.query(`
+          UPDATE product_deals 
+          SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE status = 'SHIPPED' AND shipped_at < CURRENT_TIMESTAMP - INTERVAL '5 days'
+        `);
+        if (autoDelivered.rowCount > 0) {
+          console.log(`📦 Auto-delivered ${autoDelivered.rowCount} deals.`);
+        }
+
+        // 2. Auto-Confirm Logic (DELIVERED -> CONFIRMED after 48 hours as per new requirement)
         const result = await pool.query(`
           UPDATE product_deals 
           SET status = 'CONFIRMED', 
+              buyer_confirmed_at = CURRENT_TIMESTAMP,
               payout_status = 'RELEASED',
-              payout_released_at = CURRENT_TIMESTAMP
+              payout_released_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
           WHERE status = 'DELIVERED' 
-            AND auto_payout_at <= CURRENT_TIMESTAMP
-          RETURNING id, seller_id, seller_payout, product_id
+            AND seller_delivered_at < CURRENT_TIMESTAMP - INTERVAL '48 hours'
+          RETURNING id, seller_id, seller_payout, product_id, total_platform_fee
         `);
 
         if (result.rows.length > 0) {
@@ -57,6 +70,10 @@ const cronService = {
               "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
               [deal.id, deal.seller_id, deal.seller_payout]
             );
+            await pool.query(
+              "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
+              [deal.id, null, deal.total_platform_fee]
+            );
             // Mark product as sold
             await pool.query(
               "UPDATE products SET status = 'sold' WHERE id = $1 AND status != 'sold'",
@@ -65,7 +82,7 @@ const cronService = {
           }
         }
       } catch (error) {
-        console.error('❌ Cron auto-confirm failed:', error.message);
+        console.error('❌ Cron auto-confirm/deliver failed:', error.message);
       }
     });
 

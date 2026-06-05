@@ -38,7 +38,8 @@ exports.createRazorpayOrder = async (req, res) => {
     const buyerCommissionAmount = parseFloat(deal.buyer_commission_amount || 0);
     
     // Platform GST is usually on the commission.
-    const gstRate = 18; // Default 18%
+    const settingsResult = await pool.query("SELECT value FROM platform_settings WHERE key = 'gst_rate'");
+    const gstRate = parseFloat(settingsResult.rows[0]?.value) || 18;
     const platformGstOnBuyerComm = buyerCommissionAmount * (gstRate / 100);
     
     const totalAmount = productPrice + shippingFee + buyerCommissionAmount + platformGstOnBuyerComm;
@@ -84,14 +85,15 @@ exports.verifyRazorpayPayment = async (req, res) => {
     const isSignatureValid = expectedSignature === razorpay_signature;
 
     if (isSignatureValid) {
-      // Payment is successful, update deal status and save Razorpay IDs
+      // Payment is successful, update deal status and lock funds in ESCROW
       await pool.query(
         `UPDATE product_deals 
          SET payment_status = 'PAID', 
              status = 'PAID', 
              razorpay_order_id = $1, 
              razorpay_payment_id = $2,
-             payment_method = 'RAZORPAY'
+             payment_method = 'RAZORPAY',
+             escrow_status = 'HELD'
          WHERE id = $3`,
         [razorpay_order_id, razorpay_payment_id, deal_id]
       );
@@ -107,20 +109,86 @@ exports.verifyRazorpayPayment = async (req, res) => {
       try {
         await notificationService.createNotification({
           user_id: deal.seller_id,
-          title: "Payment Received! 💰",
-          message: `The buyer has paid for "${deal.title}". Please prepare the item for shipment.`,
+          title: "Payment Received & Held in Escrow! 💰",
+          message: `The buyer has paid for "${deal.title}". The funds are securely held in Escrow. Please prepare the item for shipment.`,
           type: 'success',
           link: '/profile?tab=selling',
           channels: ['in_app', 'email', 'sms', 'whatsapp']
         });
       } catch (err) { console.error("Payment notification failed:", err.message); }
 
-      res.json({ status: "success", message: "Payment verified successfully" });
+      res.json({ status: "success", message: "Payment verified successfully. Funds held in Escrow." });
     } else {
       res.status(400).json({ status: "failure", message: "Invalid signature" });
     }
   } catch (error) {
     console.error("Razorpay Verification Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * Escrow Release (Razorpay Route Integration)
+ * Called by Admin when verifying the shipment or releasing payout.
+ */
+exports.releaseEscrow = async (req, res) => {
+  try {
+    const { deal_id } = req.body;
+
+    const dealRes = await pool.query("SELECT * FROM product_deals WHERE id = $1", [deal_id]);
+    if (dealRes.rows.length === 0) return res.status(404).json({ message: "Deal not found" });
+
+    const deal = dealRes.rows[0];
+    
+    if (deal.escrow_status === 'RELEASED') {
+      return res.status(400).json({ message: "Funds have already been released from Escrow." });
+    }
+
+    if (deal.payment_status !== 'PAID') {
+      return res.status(400).json({ message: "Cannot release escrow for unpaid deals." });
+    }
+
+    // ─── RAZORPAY ROUTE LOGIC (Mocked for now until keys are live) ────────
+    // In production, you would call:
+    // await razorpay.payments.transfer(deal.razorpay_payment_id, {
+    //   transfers: [{
+    //     account: seller.razorpay_connected_account_id,
+    //     amount: Math.round(deal.seller_payout * 100),
+    //     currency: "INR"
+    //   }]
+    // });
+    // ──────────────────────────────────────────────────────────────────────
+
+    // Update the DB to mark Escrow as Released
+    const result = await pool.query(
+      `UPDATE product_deals 
+       SET escrow_status = 'RELEASED', 
+           payout_status = 'RELEASED',
+           payout_released_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 RETURNING *`,
+      [deal_id]
+    );
+
+    // Record in ledger
+    await pool.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'ESCROW_RELEASE', 'RELEASED')",
+      [deal.id, deal.seller_id, deal.seller_payout]
+    );
+
+    // Notify the Seller
+    await notificationService.createNotification({
+      user_id: deal.seller_id,
+      title: "Funds Released from Escrow! 💸",
+      message: `Your payout of ₹${deal.seller_payout} for deal #${deal.id} has been released from Escrow to your connected bank account.`,
+      type: 'success',
+      link: '/profile?tab=selling'
+    });
+
+    res.json({ message: "Escrow released successfully.", deal: result.rows[0] });
+
+  } catch (error) {
+    console.error("Escrow Release Error:", error);
     res.status(500).json({ error: error.message });
   }
 };

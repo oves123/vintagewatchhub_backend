@@ -23,6 +23,6 @@ module.exports = (req, res, next) => {
   } catch (error) {
     console.error("Token verification failed:", error.message);
     // Be specific to help debug
-    res.status(401).json({ message: `AUTH_ERROR: ${error.message.toUpperCase()}` });
+    res.status(401).json({ message: "Authentication failed" });
   }
 };

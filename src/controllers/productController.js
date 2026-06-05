@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const slugify = require("../utils/slugify");
 const notificationService = require("../services/notificationService");
+const cache = require("../services/cacheService");
 
 exports.createProduct = async (req, res) => {
   try {
@@ -175,10 +176,22 @@ exports.updateProduct = async (req, res) => {
       return res.status(403).json({ message: "Access denied. You can only update your own listings." });
     }
 
-    // Status logic: If already approved, keep it approved unless explicitly changed
-    let finalStatus = status;
-    if (product.status === 'approved' && status === 'pending') {
-      finalStatus = 'approved';
+    // Status Logic Security Overhaul (The "Sneaky Edit" Fix):
+    let finalStatus = status || product.status;
+    
+    if (requesterRole === 'admin') {
+      // Admins can set or maintain any status
+      finalStatus = status || product.status;
+    } else {
+      // Sellers attempting to update a listing:
+      if (status === 'draft') {
+         // Allowed to save as draft
+         finalStatus = 'draft';
+      } else {
+         // ANY other edit by a seller forces the listing into 'pending' for re-review.
+         // This completely prevents the "Sneaky Edit" where a seller modifies an approved watch.
+         finalStatus = 'pending';
+      }
     }
 
     // Media Logic: Merge existing images with new uploads
@@ -266,7 +279,19 @@ exports.updateProduct = async (req, res) => {
 
     if (result.rows.length === 0) return res.status(404).json({ message: "Product not found" });
 
-    res.json({ message: "Product updated successfully", product: result.rows[0] });
+    const updatedProduct = result.rows[0];
+
+    // Trigger price drop alerts if price changed
+    if (parseFloat(updatedProduct.price) < parseFloat(product.price)) {
+      try {
+        const priceAlertController = require("./priceAlertController");
+        await priceAlertController.checkAndNotify(id, updatedProduct.price);
+      } catch (e) {
+        console.error("Price alert check failed:", e.message);
+      }
+    }
+
+    res.json({ message: "Product updated successfully", product: updatedProduct });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -367,7 +392,11 @@ exports.getSellerListings = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
   try {
-    const { search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type } = req.query;
+    const { search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type, page: queryPage, limit: queryLimit } = req.query;
+
+    const cacheKey = `products:${JSON.stringify({ search, category, brand, minPrice, maxPrice, condition, format, sort, strap_type, page: queryPage, limit: queryLimit })}`;
+    const cached = await cache.get(cacheKey);
+    if (cached) return res.json(cached);
 
     // Pagination
     const page  = Math.max(1, parseInt(req.query.page)  || 1);
@@ -381,10 +410,14 @@ exports.getProducts = async (req, res) => {
       WHERE products.status = 'approved'
     `;
     const params = [];
+    let useFullText = false;
+    let searchParamIdx = null;
 
     if (search) {
-      params.push(`%${search}%`);
-      baseWhere += ` AND (products.title ILIKE $${params.length} OR products.description ILIKE $${params.length})`;
+      params.push(search);
+      searchParamIdx = params.length;
+      baseWhere += ` AND products.search_vector @@ plainto_tsquery('english', $${params.length})`;
+      useFullText = true;
     }
 
     if (category) {
@@ -430,6 +463,15 @@ exports.getProducts = async (req, res) => {
       baseWhere += ` AND products.condition_details->>'strap_type' = $${params.length}`;
     }
 
+    let orderClause;
+    if (useFullText && !sort) {
+      orderClause = `ORDER BY ts_rank(products.search_vector, plainto_tsquery('english', $${searchParamIdx})) DESC, products.id DESC`;
+    } else {
+      orderClause = sort === "lowest_price" ? "ORDER BY products.price ASC"
+                  : sort === "highest_price" ? "ORDER BY products.price DESC"
+                  : "ORDER BY products.id DESC";
+    }
+
     // Run count and data queries in parallel
     const [countResult, result] = await Promise.all([
       pool.query(`SELECT COUNT(*) ${baseWhere}`, params),
@@ -437,9 +479,7 @@ exports.getProducts = async (req, res) => {
         `SELECT products.*, categories.name AS category_name,
                 users.is_verified AS seller_verified, users.seller_badge
          ${baseWhere}
-         ${sort === "lowest_price"  ? "ORDER BY products.price ASC"
-         : sort === "highest_price" ? "ORDER BY products.price DESC"
-         : "ORDER BY products.id DESC"}
+         ${orderClause}
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset]
       )
@@ -456,7 +496,9 @@ exports.getProducts = async (req, res) => {
       return resObj;
     });
 
-    res.json({ products, total, page, limit, pages: Math.ceil(total / limit) });
+    const resultData = { products, total, page, limit, pages: Math.ceil(total / limit) };
+    cache.set(cacheKey, resultData);
+    res.json(resultData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -464,7 +506,9 @@ exports.getProducts = async (req, res) => {
 
 exports.getBrands = async (req, res) => {
   try {
-    // UPDATED: More robust extraction - removes empty, null, and handles trimming
+    const cached = await cache.get("brands");
+    if (cached) return res.json(cached);
+
     const result = await pool.query(
       `SELECT DISTINCT TRIM(item_specifics->>'brand') as brand 
        FROM products 
@@ -473,7 +517,34 @@ exports.getBrands = async (req, res) => {
        AND TRIM(item_specifics->>'brand') != ''
        ORDER BY brand ASC`
     );
-    res.json(result.rows.map(r => r.brand));
+    const brands = result.rows.map(r => r.brand);
+    cache.set("brands", brands);
+    res.json(brands);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getFilterCounts = async (req, res) => {
+  try {
+    const cached = await cache.get("filter:counts");
+    if (cached) return res.json(cached);
+
+    const statusFilter = "WHERE status IN ('approved', 'under_offer')";
+    const [categoryRes, brandRes, conditionRes] = await Promise.all([
+      pool.query(`SELECT c.id, c.name, COUNT(p.id)::int as count FROM categories c LEFT JOIN products p ON p.category_id = c.id AND p.status IN ('approved', 'under_offer') GROUP BY c.id, c.name ORDER BY c.name`),
+      pool.query(`SELECT TRIM(p.item_specifics->>'brand') as brand, COUNT(*)::int as count FROM products p ${statusFilter} AND p.item_specifics->>'brand' IS NOT NULL AND TRIM(p.item_specifics->>'brand') != '' GROUP BY brand ORDER BY count DESC`),
+      pool.query(`SELECT condition_code, COUNT(*)::int as count FROM products p ${statusFilter} AND condition_code IS NOT NULL GROUP BY condition_code ORDER BY count DESC`),
+    ]);
+
+    const result = {
+      categories: categoryRes.rows.map(r => ({ name: r.name, id: r.id, count: parseInt(r.count) })),
+      brands: brandRes.rows.map(r => ({ name: r.brand, count: parseInt(r.count) })),
+      conditions: conditionRes.rows.map(r => ({ code: r.condition_code, count: parseInt(r.count) })),
+    };
+
+    cache.set("filter:counts", result);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -541,6 +612,9 @@ exports.getProductById = async (req, res) => {
     if (resObj.payment_info && typeof resObj.payment_info === 'string') {
       try { resObj.payment_info = JSON.parse(resObj.payment_info); } catch(e) { resObj.payment_info = {}; }
     }
+    if (resObj.images && typeof resObj.images === 'string') {
+      try { resObj.images = JSON.parse(resObj.images); } catch(e) { resObj.images = []; }
+    }
 
     res.json(resObj);
   } catch (error) {
@@ -551,6 +625,9 @@ exports.getProductById = async (req, res) => {
 
 exports.getCategories = async (req, res) => {
   try {
+    const cached = await cache.get("categories");
+    if (cached) return res.json(cached);
+
     const categoriesResult = await pool.query("SELECT * FROM categories ORDER BY name ASC");
     const specsResult = await pool.query("SELECT * FROM category_specs ORDER BY id ASC");
     const conditionResult = await pool.query("SELECT * FROM condition_templates ORDER BY id ASC");
@@ -561,6 +638,7 @@ exports.getCategories = async (req, res) => {
       conditions: conditionResult.rows.filter(c => c.category_id === cat.id)
     }));
 
+    cache.set("categories", categoriesWithSpecs);
     res.json(categoriesWithSpecs);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -585,8 +663,9 @@ exports.updateProductStatus = async (req, res) => {
     }
 
     // Restriction: Sellers cannot approve their own products if they were rejected or pending
-    // But they can probably mark as 'sold' or 'inactive'
-    // For now, let's allow it but we might want to restrict 'approved' status if we want admin control.
+    if (requesterRole !== 'admin' && ['approved', 'rejected'].includes(status)) {
+      return res.status(403).json({ message: "Access denied. Only admins can approve or reject listings." });
+    }
     
     const result = await pool.query(
       "UPDATE products SET status = $1 WHERE id = $2 RETURNING *",
@@ -613,6 +692,6 @@ exports.recordProductView = async (req, res) => {
     res.json({ message: "View recorded" });
   } catch (error) {
     console.error("View recording failed:", error.message);
-    res.status(200).json({ message: "View record failed silently" });
+    res.json({ message: "View recorded" });
   }
 };

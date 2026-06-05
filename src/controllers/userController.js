@@ -120,7 +120,7 @@ exports.getUserActivity = async (req, res) => {
        JOIN products p ON c.product_id = p.id
        JOIN users u ON c.seller_id = u.id
        WHERE c.buyer_id = $1 
-       AND p.id NOT IN (SELECT product_id FROM orders WHERE buyer_id = $1)
+       AND p.id NOT IN (SELECT product_id FROM product_deals WHERE buyer_id = $1)
        ORDER BY p.created_at DESC`, [id]
     );
 
@@ -145,39 +145,6 @@ exports.getUserActivity = async (req, res) => {
       listings: parseJSONFields(listings.rows),
       chattedProducts: parseJSONFields(chattedProducts.rows)
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-// Vault Management
-exports.getWatchVault = async (req, res) => {
-  try {
-    const { user_id } = req.params;
-    const requesterId = req.user.id;
-
-    if (parseInt(user_id) !== parseInt(requesterId)) {
-      return res.status(403).json({ message: "Access denied." });
-    }
-    const result = await pool.query(
-      "SELECT * FROM watch_vault WHERE user_id = $1 ORDER BY created_at DESC",
-      [user_id]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-exports.addToVault = async (req, res) => {
-  try {
-    const { watch_name, brand, year, image_url } = req.body;
-    const user_id = req.user.id; // Enforce authenticated user ID to prevent IDOR/BOLA
-    const result = await pool.query(
-      "INSERT INTO watch_vault (user_id, watch_name, brand, year, image_url) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [user_id, watch_name, brand, year, image_url]
-    );
-    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -260,7 +227,7 @@ exports.getMyFinancialLedger = async (req, res) => {
       SELECT 
         d.*, 
         p.title as product_title, 
-        p.image as product_image,
+        p.images as product_image,
         b.name as buyer_name,
         s.name as seller_name,
         (d.amount + d.shipping_fee + d.buyer_commission_amount + (d.buyer_commission_amount * 0.18)) as total_buyer_cost
@@ -319,29 +286,6 @@ exports.getMyFinancialLedger = async (req, res) => {
   }
 };
 
-// Accept Terms & Conditions
-exports.acceptTerms = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    // Silently handle if terms_accepted / terms_accepted_at columns don't exist yet
-    try {
-      await pool.query(
-        "UPDATE users SET terms_accepted = true, terms_accepted_at = CURRENT_TIMESTAMP WHERE id = $1",
-        [userId]
-      );
-    } catch {
-      try {
-        await pool.query("UPDATE users SET terms_accepted = true WHERE id = $1", [userId]);
-      } catch {
-        // Column doesn't exist yet — swallow gracefully, terms acceptance is a soft requirement
-      }
-    }
-    res.json({ message: "Terms accepted successfully." });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
 // Get user's Watch Vault (personal collection not listed for sale)
 exports.getWatchVault = async (req, res) => {
   try {
@@ -357,7 +301,7 @@ exports.getWatchVault = async (req, res) => {
       );
       res.json(result.rows);
     } catch {
-      res.json([]); // Table may not exist yet
+      res.json([]);
     }
   } catch (error) {
     res.status(500).json({ error: error.message });

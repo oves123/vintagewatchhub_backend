@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const { calculateDealFinancials } = require("../utils/commissionCalculator");
 
 // Create a new offer
 exports.createOffer = async (req, res) => {
@@ -163,19 +164,14 @@ exports.respondToOffer = async (req, res) => {
         const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
 
         // 5. Calculations
-        const seller_commission_amount = finalAmount * (sellerCommissionRate / 100);
-        const buyer_commission_amount = finalAmount * (buyerCommissionRate / 100);
-        const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
-        const total_platform_fee = seller_commission_amount + buyer_commission_amount + platform_gst_amount;
-        
-        let tcs_rate = 0;
-        let tcs_amount = 0;
-        if (seller.gst_number) {
-            tcs_rate = 1.00; // 1%
-            tcs_amount = finalAmount * 0.01;
-        }
-
-        const seller_payout = (finalAmount - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
+        const fin = calculateDealFinancials({ price: finalAmount, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
+        const seller_commission_amount = fin.sellerCommAmt;
+        const buyer_commission_amount = fin.buyerCommAmt;
+        const platform_gst_amount = fin.platformGst;
+        const total_platform_fee = fin.totalFee;
+        const tcs_rate = fin.tcsRate;
+        const tcs_amount = fin.tcsAmt;
+        const seller_payout = fin.sellerPayout;
         const seller_gst_applicable = seller.seller_type === 'business_seller';
         const seller_gst_number = seller.gst_number;
 

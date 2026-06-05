@@ -26,7 +26,17 @@ router.get("/chats", adminMiddleware, adminController.getChats);
 router.get("/auctions", adminMiddleware, adminController.getAuctions);
 router.get("/bids", adminMiddleware, adminController.getBids);
 router.post("/notify-seller", adminMiddleware, adminController.notifySeller);
-router.post("/products/create", adminMiddleware, upload.array("images", 10), adminController.adminCreateProduct);
+router.post("/products/create", adminMiddleware, upload.array("images", 10), upload.processImages, adminController.adminCreateProduct);
+
+// Category & Brand Management
+router.post("/categories", adminMiddleware, adminController.createCategory);
+router.put("/categories/:id", adminMiddleware, adminController.updateCategory);
+router.delete("/categories/:id", adminMiddleware, adminController.deleteCategory);
+router.post("/brands", adminMiddleware, adminController.createBrand);
+router.delete("/brands/:name", adminMiddleware, adminController.deleteBrand);
+
+// Audit Log
+router.get("/audit-log", adminMiddleware, adminController.getAuditLog);
 
 // Reports management
 router.get("/reports", adminMiddleware, adminController.getReports);

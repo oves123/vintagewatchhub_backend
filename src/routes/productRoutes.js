@@ -26,7 +26,9 @@ router.patch("/status/:id", authMiddleware, productController.updateProductStatu
 router.get("/", productController.getProducts);
 router.get("/categories", productController.getCategories);
 router.get("/brands", productController.getBrands);
+router.get("/filter-counts", productController.getFilterCounts);
 router.get("/seller/:sellerId", productController.getSellerListings);
 router.get("/:id", productController.getProductById);
+router.get("/:id/view", productController.recordProductView);
 
 module.exports = router;

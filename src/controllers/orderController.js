@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const notificationService = require("../services/notificationService");
+const { calculateDealFinancials } = require("../utils/commissionCalculator");
 
 exports.createAuctionWinnerOrder = async (req, res) => {
   const client = await pool.connect();
@@ -83,19 +84,14 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     const productPrice = parseFloat(highestBid.bid_amount);
     const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
     
-    const seller_commission_amount = productPrice * (sellerCommissionRate / 100);
-    const buyer_commission_amount = productPrice * (buyerCommissionRate / 100);
-    const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
-    const total_platform_fee = seller_commission_amount + buyer_commission_amount + platform_gst_amount;
-
-    let tcs_rate = 0;
-    let tcs_amount = 0;
-    if (seller.gst_number) {
-        tcs_rate = 1.00; // 1%
-        tcs_amount = productPrice * 0.01;
-    }
-
-    const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
+    const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
+    const seller_commission_amount = fin.sellerCommAmt;
+    const buyer_commission_amount = fin.buyerCommAmt;
+    const platform_gst_amount = fin.platformGst;
+    const total_platform_fee = fin.totalFee;
+    const tcs_rate = fin.tcsRate;
+    const tcs_amount = fin.tcsAmt;
+    const seller_payout = fin.sellerPayout;
 
     // 4. Create Product Deal
     const result = await client.query(
@@ -231,19 +227,14 @@ exports.createOrder = async (req, res) => {
     const productPrice = parseFloat(amount);
     const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
     
-    const seller_commission_amount = productPrice * (sellerCommissionRate / 100);
-    const buyer_commission_amount = productPrice * (buyerCommissionRate / 100);
-    const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
-    const total_platform_fee = seller_commission_amount + buyer_commission_amount + platform_gst_amount;
-
-    let tcs_rate = 0;
-    let tcs_amount = 0;
-    if (seller.gst_number) {
-        tcs_rate = 1.00; // 1%
-        tcs_amount = productPrice * 0.01;
-    }
-
-    const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
+    const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
+    const seller_commission_amount = fin.sellerCommAmt;
+    const buyer_commission_amount = fin.buyerCommAmt;
+    const platform_gst_amount = fin.platformGst;
+    const total_platform_fee = fin.totalFee;
+    const tcs_rate = fin.tcsRate;
+    const tcs_amount = fin.tcsAmt;
+    const seller_payout = fin.sellerPayout;
 
     // 3. Create Product Deal
     const result = await client.query(
@@ -251,9 +242,10 @@ exports.createOrder = async (req, res) => {
         product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
         commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
         seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
-        buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
+        buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount,
+        escrow_status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20, 'HELD') RETURNING *`,
       [
         product_id, buyer_id, seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
         sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
@@ -314,7 +306,7 @@ exports.buyNowDirect = async (req, res) => {
       return res.status(400).json({ message: "This item is no longer available for purchase" });
     }
 
-    if (!product.allow_buy_now && !product.buy_it_now_price) {
+    if (!product.allow_buy_now || !product.buy_it_now_price) {
        await client.query('ROLLBACK');
        return res.status(400).json({ message: "Buy Now is not available for this item" });
     }
@@ -365,19 +357,14 @@ exports.buyNowDirect = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
 
-    const seller_commission_amount = productPrice * (sellerCommissionRate / 100);
-    const buyer_commission_amount = productPrice * (buyerCommissionRate / 100);
-    const platform_gst_amount = (seller_commission_amount + buyer_commission_amount) * (gstRate / 100);
-    const total_platform_fee = seller_commission_amount + buyer_commission_amount + platform_gst_amount;
-
-    let tcs_rate = 0;
-    let tcs_amount = 0;
-    if (seller.gst_number) {
-        tcs_rate = 1.00; // 1%
-        tcs_amount = productPrice * 0.01;
-    }
-
-    const seller_payout = (productPrice - seller_commission_amount - (seller_commission_amount * (gstRate / 100)) - tcs_amount) + shippingFee;
+    const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
+    const seller_commission_amount = fin.sellerCommAmt;
+    const buyer_commission_amount = fin.buyerCommAmt;
+    const platform_gst_amount = fin.platformGst;
+    const total_platform_fee = fin.totalFee;
+    const tcs_rate = fin.tcsRate;
+    const tcs_amount = fin.tcsAmt;
+    const seller_payout = fin.sellerPayout;
 
     // Reject all pending offers for this product
     await client.query(
@@ -429,43 +416,6 @@ exports.buyNowDirect = async (req, res) => {
 exports.getUserDeals = async (req, res) => {
   try {
     const { user_id } = req.params;
-
-    // 1. Lazy Expiry Cleanup (Failed to ship in 48h)
-    const expiredDeals = await pool.query(`
-      UPDATE product_deals 
-      SET status = 'EXPIRED' 
-      WHERE status = 'ACCEPTED' AND expires_at < CURRENT_TIMESTAMP
-      RETURNING product_id
-    `);
-
-    if (expiredDeals.rows.length > 0) {
-      const productIds = [...new Set(expiredDeals.rows.map(r => r.product_id))];
-      for (const pid of productIds) {
-        await pool.query(`
-          UPDATE products 
-          SET status = 'approved' 
-          WHERE id = $1 AND status = 'under_offer'
-          AND NOT EXISTS (
-            SELECT 1 FROM product_deals 
-            WHERE product_id = $1 AND status IN ('ACCEPTED', 'SHIPPED', 'DELIVERED')
-          )
-        `, [pid]);
-      }
-    }
-
-    // 2. Auto-Delivered Logic (SHIPPED -> DELIVERED after 5 days if no action)
-    await pool.query(`
-      UPDATE product_deals 
-      SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE status = 'SHIPPED' AND shipped_at < CURRENT_TIMESTAMP - INTERVAL '5 days'
-    `);
-
-    // 3. Auto-Confirm Logic (DELIVERED -> CONFIRMED after 48 hours as per new requirement)
-    await pool.query(`
-      UPDATE product_deals 
-      SET status = 'CONFIRMED', buyer_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE status = 'DELIVERED' AND seller_delivered_at < CURRENT_TIMESTAMP - INTERVAL '48 hours'
-    `);
 
     const result = await pool.query(
       `SELECT d.*, p.title, p.images, 
@@ -676,40 +626,45 @@ exports.confirmReceived = async (req, res) => {
 
 // Buyer confirms completion (CONFIRMED) - The final gating step
 exports.confirmSale = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params; 
     const buyer_id = req.user.id;
     const unboxing_video = req.file ? req.file.path : null;
 
-    const result = await pool.query(
+    const result = await client.query(
       "UPDATE product_deals SET status = 'CONFIRMED', buyer_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, unboxing_video = $1 WHERE id = $2 AND buyer_id = $3 AND status = 'DELIVERED' RETURNING *",
       [unboxing_video, id, buyer_id]
     );
 
-    if (result.rows.length === 0) return res.status(403).json({ message: 'Unauthorized or deal not in DELIVERED state (Check for DISPUTE)' });
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Unauthorized or deal not in DELIVERED state (Check for DISPUTE)' });
+    }
     
     // Release Payout in internal logic
     const deal = result.rows[0];
-    await pool.query(
+    await client.query(
       "UPDATE product_deals SET payout_status = 'RELEASED', payout_released_at = CURRENT_TIMESTAMP WHERE id = $1",
       [id]
     );
 
     // LOG TO FINANCIAL LEDGER (Payout & Commission)
-    await pool.query(
+    await client.query(
       "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
       [id, deal.seller_id, deal.seller_payout]
     );
-    await pool.query(
+    await client.query(
       "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
       [id, null, deal.total_platform_fee]
     );
 
+    await client.query('COMMIT');
     res.json({ message: 'Sale confirmed and finalized. Payout released to seller wallet logic.' });
 
     // Notify Seller
     try {
-      const deal = result.rows[0];
       const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
       await notificationService.createNotification({
         user_id: deal.seller_id,
@@ -721,33 +676,36 @@ exports.confirmSale = async (req, res) => {
       });
     } catch (err) { console.error("Finalize notification failed:", err.message); }
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 
 // Cancel Deal
 exports.cancelDeal = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params;
     const user_id = req.user.id;
     const { reason } = req.body;
 
     // Verify ownership and ensure it's still in a cancellable state
-    // Cancellable states: 
-    // 1. ACCEPTED (Pre-payment)
-    // 2. PAID but expired (Seller failed to ship within 48-72h)
-    const dealCheck = await pool.query(
+    const dealCheck = await client.query(
       `SELECT * FROM product_deals 
        WHERE id = $1 AND (seller_id = $2 OR buyer_id = $2) 
        AND (
          status = 'ACCEPTED' 
          OR (status = 'PAID' AND expires_at < CURRENT_TIMESTAMP)
        )
-       AND shipped_at IS NULL`,
+       AND shipped_at IS NULL FOR UPDATE`,
       [id, user_id]
     );
 
     if (dealCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ 
         message: 'Cancellation blocked: Order may have already been shipped, or the shipping deadline has not yet passed for this paid order.' 
       });
@@ -758,18 +716,20 @@ exports.cancelDeal = async (req, res) => {
     const newStatus = isPaid ? 'REFUND_PENDING' : 'CANCELLED';
 
     // Mark deal as cancelled or refund pending
-    await pool.query(
+    await client.query(
       "UPDATE product_deals SET status = $1, cancel_reason = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
       [newStatus, reason, id]
     );
 
     // If it wasn't paid, we can immediately reactivate the product
     if (!isPaid) {
-      await pool.query(
+      await client.query(
         "UPDATE products SET status = 'approved' WHERE id = $1",
         [deal.product_id]
       );
     }
+
+    await client.query('COMMIT');
 
     // Notifications
     try {
@@ -777,7 +737,6 @@ exports.cancelDeal = async (req, res) => {
       const productTitle = productRes.rows[0]?.title || 'Watch';
       const otherPartyId = (user_id == deal.buyer_id) ? deal.seller_id : deal.buyer_id;
 
-      // Notify the other party
       await notificationService.createNotification({
         user_id: otherPartyId,
         title: isPaid ? "Order Cancellation & Refund Request ⚠️" : "Order Cancelled 🛑",
@@ -786,7 +745,6 @@ exports.cancelDeal = async (req, res) => {
         link: (user_id == deal.buyer_id) ? '/profile?tab=selling' : '/profile?tab=buying'
       });
 
-      // If PAID, notify Admins to process refund
       if (isPaid) {
         const adminIds = await notificationService.getAdminIds();
         for (const adminId of adminIds) {
@@ -808,7 +766,10 @@ exports.cancelDeal = async (req, res) => {
       status: newStatus
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 
@@ -816,7 +777,8 @@ exports.cancelDeal = async (req, res) => {
 exports.disputeDeal = async (req, res) => {
   try {
     const { id } = req.params;
-    const { user_id, reason } = req.body;
+    const { reason } = req.body;
+    const user_id = req.user.id;
 
     const result = await pool.query(
       "UPDATE product_deals SET status = 'DISPUTED', dispute_reason = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND (seller_id = $3 OR buyer_id = $3) RETURNING *",
@@ -862,7 +824,8 @@ exports.disputeDeal = async (req, res) => {
 exports.markReturned = async (req, res) => {
   try {
     const { id } = req.params;
-    const { seller_id, reason } = req.body;
+    const { reason } = req.body;
+    const seller_id = req.user.id;
 
     const result = await pool.query(
       "UPDATE product_deals SET status = 'RETURNED', cancel_reason = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND seller_id = $3 AND status IN ('SHIPPED', 'DELIVERED') RETURNING *",

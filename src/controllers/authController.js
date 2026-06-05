@@ -15,7 +15,7 @@ exports.register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      "INSERT INTO users(name,email,password,phone,city,state,pincode,seller_type,gst_number,pan_number,gst_enrolment_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+      "INSERT INTO users(name,email,password,phone,city,state,pincode,seller_type,gst_number,pan_number,gst_enrolment_id, terms_accepted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, true) RETURNING *",
       [name, email, hashedPassword, phone, city, state, pincode, seller_type || 'individual_collector', gst_number || null, pan_number || null, gst_enrolment_id || null]
     );
 
@@ -31,7 +31,7 @@ exports.register = async (req, res) => {
         role: u.role,
         seller_type: u.seller_type,
         state: u.state,
-        terms_accepted: false
+        terms_accepted: true
       }
     });
   } catch (error) {
@@ -147,6 +147,25 @@ exports.login = async (req, res) => {
       return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
     }
 
+    // ─── Admin 2FA Gate ────────────────────────────────────────────────────
+    // If the user is an admin AND has 2FA enabled, issue a short-lived
+    // temp_token instead of the real JWT. The frontend must then call
+    // POST /auth/2fa/validate with this token + their TOTP code.
+    if (user.role === "admin" && user.two_fa_enabled && user.two_fa_secret) {
+      const tempToken = jwt.sign(
+        { id: user.id, role: user.role, requires_2fa: true },
+        process.env.JWT_SECRET,
+        { expiresIn: "5m" } // Only valid for 5 minutes — must complete 2FA quickly
+      );
+
+      return res.json({
+        requires_2fa: true,
+        temp_token: tempToken,
+        message: "Admin 2FA required. Please enter your 6-digit Authenticator code.",
+      });
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
     const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, {
       expiresIn: "7d"
     });
@@ -164,7 +183,8 @@ exports.login = async (req, res) => {
         gst_number: user.gst_number,
         pan_number: user.pan_number,
         gst_enrolment_id: user.gst_enrolment_id,
-        state: user.state
+        state: user.state,
+        two_fa_enabled: user.two_fa_enabled || false,
       }
     });
 

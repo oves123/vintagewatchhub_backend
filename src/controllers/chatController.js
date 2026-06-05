@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const notificationService = require("../services/notificationService");
+const { calculateDealFinancials } = require("../utils/commissionCalculator");
 
 // Get or Create Chat
 exports.createOrGetChat = async (req, res) => {
@@ -220,39 +221,102 @@ exports.uploadChatImage = async (req, res) => {
 
 // Confirm Direct Deal (Seller confirmed verbal agreement in chat)
 exports.confirmDirectDeal = async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { chat_id, seller_id, final_price } = req.body;
+    const authenticatedUserId = req.user.id;
 
     // 1. Get chat details
-    const chatRes = await pool.query("SELECT * FROM chats WHERE id = $1 AND seller_id = $2", [chat_id, seller_id]);
+    const chatRes = await client.query("SELECT * FROM chats WHERE id = $1 AND seller_id = $2", [chat_id, seller_id]);
     if (chatRes.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ message: "Chat not found or not authorized" });
     }
     const chat = chatRes.rows[0];
 
+    // Ensure the authenticated user is the seller
+    if (parseInt(authenticatedUserId) !== parseInt(chat.seller_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: "Only the seller can confirm a direct deal." });
+    }
+
     // 2. Check if product is already in a deal
-    const productCheck = await pool.query("SELECT status FROM products WHERE id = $1", [chat.product_id]);
-    if (productCheck.rows[0].status === 'sold' || productCheck.rows[0].status === 'under_offer') {
+    const productCheck = await client.query("SELECT * FROM products WHERE id = $1 FOR UPDATE", [chat.product_id]);
+    if (productCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: "Product not found" });
+    }
+    const product = productCheck.rows[0];
+    if (product.status === 'sold' || product.status === 'under_offer') {
+      await client.query('ROLLBACK');
       return res.status(400).json({ message: "This product is already under offer or sold." });
     }
 
-    // 3. Create the deal
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 72); // Standard 72h window
+    // 3. Fetch platform settings for financial calculation
+    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
+    const settings = {};
+    settingsRes.rows.forEach(r => settings[r.key] = r.value);
+    
+    const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
+    const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
+    const gstRate = parseFloat(settings.gst_rate || 18);
+    const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
+    const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
 
-    const result = await pool.query(
-      `INSERT INTO product_deals (product_id, buyer_id, seller_id, amount, status, expires_at)
-       VALUES ($1, $2, $3, $4, 'ACCEPTED', $5) RETURNING *`,
-      [chat.product_id, chat.buyer_id, chat.seller_id, final_price, expiresAt]
+    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [chat.buyer_id]);
+    const buyer = buyerRes.rows[0];
+    const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [chat.seller_id]);
+    const seller = sellerRes.rows[0];
+
+    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: "Shipping restricted: Buyer and seller must be in the same state for local shipping." });
+    }
+
+    const isVerified = seller && seller.is_verified;
+    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
+
+    const productPrice = parseFloat(final_price);
+    const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
+    
+    const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
+    const seller_commission_amount = fin.sellerCommAmt;
+    const buyer_commission_amount = fin.buyerCommAmt;
+    const platform_gst_amount = fin.platformGst;
+    const total_platform_fee = fin.totalFee;
+    const tcs_rate = fin.tcsRate;
+    const tcs_amount = fin.tcsAmt;
+    const seller_payout = fin.sellerPayout;
+
+    // 4. Create the deal with full financial details
+    const result = await client.query(
+      `INSERT INTO product_deals (
+        product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
+        commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
+        seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
+        buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20) RETURNING *`,
+      [
+        chat.product_id, chat.buyer_id, chat.seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
+        sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
+        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, tcs_rate, tcs_amount,
+        buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
+      ]
     );
 
-    // 4. Update product status
-    await pool.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [chat.product_id]);
+    // 5. Update product status
+    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [chat.product_id]);
 
-    // 5. Send a system message to the chat
+    await client.query('COMMIT');
+
+    // 6. Send a system message to the chat
     const systemMsg = await pool.query(
       "INSERT INTO messages (chat_id, sender_id, message, type, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [chat_id, seller_id, `DEAL CONFIRMED: Price set to ₹${parseFloat(final_price).toLocaleString()}. Please proceed with shipment.`, 'system_deal', JSON.stringify({ deal_id: result.rows[0].id, price: final_price })]
+      [chat_id, seller_id, `DEAL CONFIRMED: Price set to ₹${parseFloat(final_price).toLocaleString()}. Please proceed with payment.`, 'system_deal', JSON.stringify({ deal_id: result.rows[0].id, price: final_price })]
     );
 
     const io = req.app.get("io");
@@ -263,7 +327,10 @@ exports.confirmDirectDeal = async (req, res) => {
     res.json({ message: "Deal confirmed successfully!", deal: result.rows[0] });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
   }
 };
 
