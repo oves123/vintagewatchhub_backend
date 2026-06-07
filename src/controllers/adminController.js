@@ -3,6 +3,15 @@ const { logAdminAction } = require("../utils/adminLogger");
 const notificationService = require("../services/notificationService");
 const cache = require("../services/cacheService");
 const watchRegister = require("../services/watchRegisterService");
+const Razorpay = require("razorpay");
+
+let razorpay;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+}
 
 exports.getStats = async (req, res) => {
   try {
@@ -686,7 +695,18 @@ exports.getProducts = async (req, res) => {
           });
         } catch (err) { console.error("Payout notification failed:", err.message); }
 
-        // Log payout to ledger
+        // Fetch current seller balance snapshot for user_ledgers
+        const currentBalanceRes = await pool.query("SELECT COALESCE(SUM(CASE WHEN transaction_type = 'CREDIT' THEN amount ELSE -amount END), 0) as balance FROM user_ledgers WHERE user_id = $1", [deal.seller_id]);
+        const currentBalance = parseFloat(currentBalanceRes.rows[0].balance || 0);
+        const newBalance = currentBalance - parseFloat(deal.seller_payout);
+
+        // Debit the seller's user_ledger
+        await pool.query(
+          "INSERT INTO user_ledgers (user_id, deal_id, amount, transaction_type, reference_type, balance_snapshot, description) VALUES ($1, $2, $3, 'DEBIT', 'PAYOUT', $4, $5)",
+          [deal.seller_id, deal.id, deal.seller_payout, newBalance, 'Platform payout released to seller bank account']
+        );
+
+        // Log payout to financial_ledger (Admin audit log)
         await pool.query(
           "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
           [deal.id, deal.seller_id, deal.seller_payout]
@@ -783,7 +803,7 @@ exports.getProducts = async (req, res) => {
        SET status = $1, payment_status = $2, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $3 AND status = 'PAID' 
        RETURNING *`,
-          [status === 'PAID' ? 'PAID' : 'ACCEPTED', status === 'PAID' ? 'PAID' : 'PENDING', id]
+          [status === 'PAID' ? 'PAID' : 'AWAITING_PAYMENT', status === 'PAID' ? 'PAID' : 'PENDING', id]
         );
 
         if (result.rows.length === 0) {
@@ -856,6 +876,22 @@ exports.getProducts = async (req, res) => {
        RETURNING *`,
           [id]
         );
+
+        // Razorpay Refund Integration
+        if (deal.payment_method === 'RAZORPAY' && deal.payment_receipt) {
+          if (!razorpay) {
+            throw new Error("Razorpay SDK is not initialized. Check environment variables.");
+          }
+          try {
+            // Note: If Razorpay throws an error (e.g. payment already refunded), we catch and log it,
+            // but we still proceed to cancel the deal in the database.
+            await razorpay.payments.refund(deal.payment_receipt);
+            console.log(`Razorpay refund processed for deal ID: ${deal.id}, Payment ID: ${deal.payment_receipt}`);
+          } catch (refundError) {
+             console.error(`Razorpay refund failed for deal ${deal.id}:`, refundError.message || refundError);
+             throw new Error(`Razorpay refund failed: ${refundError.error?.description || refundError.message}`);
+          }
+        }
 
         // 3. Reactivate the product for the marketplace and extend auction if needed
         await pool.query(`

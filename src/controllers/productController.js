@@ -74,6 +74,24 @@ exports.createProduct = async (req, res) => {
       return res.status(400).json({ error: "At least one video is mandatory for listing." });
     }
 
+    if (shipping_scope === 'PAN_INDIA') {
+      const userResult = await pool.query("SELECT gst_number FROM users WHERE id = $1", [seller_id]);
+      if (userResult.rows.length === 0 || !userResult.rows[0].gst_number) {
+        return res.status(400).json({ error: "A verified GST number is required for Pan-India shipping." });
+      }
+    }
+
+    if (isTrue(allow_auction)) {
+      if (!auction_end || new Date(auction_end) <= new Date()) {
+        return res.status(400).json({ error: "Auction end date must be in the future." });
+      }
+      const maxDate = new Date();
+      maxDate.setDate(maxDate.getDate() + 30);
+      if (new Date(auction_end) > maxDate) {
+        return res.status(400).json({ error: "Auction end date cannot be more than 30 days in the future." });
+      }
+    }
+
     // Auto-approve for verified sellers
     let finalStatus = status || 'pending';
     const userResult = await pool.query("SELECT is_verified FROM users WHERE id = $1", [seller_id]);
@@ -170,6 +188,24 @@ exports.updateProduct = async (req, res) => {
     const product = currentProductResult.rows[0];
     const requesterId = req.user.id;
     const requesterRole = req.user.role;
+
+    if (shipping_scope === 'PAN_INDIA') {
+      const userResult = await pool.query("SELECT gst_number FROM users WHERE id = $1", [requesterId]);
+      if (userResult.rows.length === 0 || !userResult.rows[0].gst_number) {
+        return res.status(400).json({ error: "A verified GST number is required for Pan-India shipping." });
+      }
+    }
+
+    if (isTrue(allow_auction)) {
+      if (!auction_end || new Date(auction_end) <= new Date()) {
+        return res.status(400).json({ error: "Auction end date must be in the future." });
+      }
+      const maxDate = new Date();
+      maxDate.setDate(maxDate.getDate() + 30);
+      if (new Date(auction_end) > maxDate) {
+        return res.status(400).json({ error: "Auction end date cannot be more than 30 days in the future." });
+      }
+    }
 
     // Only allow seller or admin to update
     if (parseInt(product.seller_id) !== parseInt(requesterId) && requesterRole !== 'admin') {

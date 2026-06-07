@@ -236,6 +236,9 @@ exports.createOrder = async (req, res) => {
     const tcs_amount = fin.tcsAmt;
     const seller_payout = fin.sellerPayout;
 
+    const initialPaymentStatus = product.shipping_type === 'contact' ? 'AWAITING_QUOTE' : 'PENDING';
+    const dbShippingFee = product.shipping_type === 'contact' ? null : shippingFee;
+
     // 3. Create Product Deal
     const result = await client.query(
       `INSERT INTO product_deals (
@@ -245,11 +248,11 @@ exports.createOrder = async (req, res) => {
         buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount,
         escrow_status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20, 'HELD') RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL) RETURNING *`,
       [
-        product_id, buyer_id, seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
+        product_id, buyer_id, seller_id, productPrice, dbShippingFee, product.shipping_type, expiresAt,
         sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
-        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, tcs_rate, tcs_amount,
+        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, initialPaymentStatus, tcs_rate, tcs_amount,
         buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
       ]
     );
@@ -260,7 +263,7 @@ exports.createOrder = async (req, res) => {
     await client.query('COMMIT');
 
     res.json({
-      message: "Order created successfully. Please complete the payment.",
+      message: initialPaymentStatus === 'AWAITING_QUOTE' ? "Order created. Waiting for seller to quote shipping." : "Order created successfully. Please complete the payment.",
       deal: result.rows[0]
     });
 
@@ -372,6 +375,9 @@ exports.buyNowDirect = async (req, res) => {
       [product_id]
     );
 
+    const initialPaymentStatus = product.shipping_type === 'contact' ? 'AWAITING_QUOTE' : 'PENDING';
+    const dbShippingFee = product.shipping_type === 'contact' ? null : shippingFee;
+
     const result = await client.query(
       `INSERT INTO product_deals (
         product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
@@ -379,11 +385,11 @@ exports.buyNowDirect = async (req, res) => {
         seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
         buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *`,
       [
-        product_id, buyer_id, product.seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
+        product_id, buyer_id, product.seller_id, productPrice, dbShippingFee, product.shipping_type, expiresAt,
         sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
-        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, tcs_rate, tcs_amount,
+        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, initialPaymentStatus, tcs_rate, tcs_amount,
         buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
       ]
     );
@@ -392,7 +398,10 @@ exports.buyNowDirect = async (req, res) => {
 
     await client.query('COMMIT');
 
-    res.json({ message: "Deal secured successfully. Please complete the payment.", deal: result.rows[0] });
+    res.json({ 
+      message: initialPaymentStatus === 'AWAITING_QUOTE' ? "Deal secured. Waiting for seller to quote shipping." : "Deal secured successfully. Please complete the payment.", 
+      deal: result.rows[0] 
+    });
 
     try {
       await notificationService.createNotification({
@@ -650,11 +659,7 @@ exports.confirmSale = async (req, res) => {
       [id]
     );
 
-    // LOG TO FINANCIAL LEDGER (Payout & Commission)
-    await client.query(
-      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
-      [id, deal.seller_id, deal.seller_payout]
-    );
+    // LOG TO FINANCIAL LEDGER (Commission Only - Payout is logged on Admin Escrow Release)
     await client.query(
       "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
       [id, null, deal.total_platform_fee]
@@ -882,3 +887,62 @@ exports.uploadEvidence = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Add Shipping Quote
+exports.addShippingQuote = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { id } = req.params;
+    const { shipping_fee } = req.body;
+    const seller_id = req.user.id;
+
+    if (shipping_fee === undefined || shipping_fee === null || isNaN(shipping_fee) || parseFloat(shipping_fee) < 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Valid shipping fee is required' });
+    }
+
+    const dealCheck = await client.query(
+      "SELECT * FROM product_deals WHERE id = $1 AND seller_id = $2 AND payment_status = 'AWAITING_QUOTE' FOR UPDATE",
+      [id, seller_id]
+    );
+
+    if (dealCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Deal not found or not awaiting shipping quote' });
+    }
+
+    const deal = dealCheck.rows[0];
+    const newShippingFee = parseFloat(shipping_fee);
+
+    // Update the deal with the new shipping fee and set payment_status to PENDING
+    const result = await client.query(
+      `UPDATE product_deals 
+       SET shipping_fee = $1, payment_status = 'PENDING', updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2 RETURNING *`,
+      [newShippingFee, id]
+    );
+
+    await client.query('COMMIT');
+
+    // Notify Buyer
+    try {
+      const productRes = await pool.query("SELECT title FROM products WHERE id = $1", [deal.product_id]);
+      await notificationService.createNotification({
+        user_id: deal.buyer_id,
+        title: "Shipping Quote Received! 📦",
+        message: `The seller has quoted ₹${newShippingFee.toLocaleString()} for shipping "${productRes.rows[0]?.title}". You can now proceed to payment.`,
+        type: 'success',
+        link: '/profile?tab=buying',
+        channels: ['in_app', 'email']
+      });
+    } catch (err) { console.error("Notification error:", err); }
+
+    res.json({ message: 'Shipping quote added successfully. Buyer has been notified.', deal: result.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+};

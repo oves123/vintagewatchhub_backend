@@ -36,13 +36,15 @@ exports.createRazorpayOrder = async (req, res) => {
     const productPrice = parseFloat(deal.amount);
     const shippingFee = parseFloat(deal.shipping_fee || 0);
     const buyerCommissionAmount = parseFloat(deal.buyer_commission_amount || 0);
-    
-    // Platform GST is usually on the commission.
-    const settingsResult = await pool.query("SELECT value FROM platform_settings WHERE key = 'gst_rate'");
-    const gstRate = parseFloat(settingsResult.rows[0]?.value) || 18;
-    const platformGstOnBuyerComm = buyerCommissionAmount * (gstRate / 100);
-    
-    const totalAmount = productPrice + shippingFee + buyerCommissionAmount + platformGstOnBuyerComm;
+    const sellerCommissionAmount = parseFloat(deal.seller_commission_amount || deal.commission_amount || 0);
+    const platformGstAmount = parseFloat(deal.platform_gst_amount || 0);
+
+    const divisor = sellerCommissionAmount + buyerCommissionAmount;
+    const buyerGst = (buyerCommissionAmount > 0 && divisor > 0)
+      ? platformGstAmount * (buyerCommissionAmount / divisor)
+      : 0;
+
+    const totalAmount = productPrice + shippingFee + buyerCommissionAmount + buyerGst;
 
     // Razorpay expects amount in paise (multiply by 100)
     const options = {
@@ -98,12 +100,24 @@ exports.verifyRazorpayPayment = async (req, res) => {
         [razorpay_order_id, razorpay_payment_id, deal_id]
       );
 
-      // Fetch deal to notify seller
+      // Fetch deal to notify seller and log ledger
       const dealRes = await pool.query(
         "SELECT d.*, p.title FROM product_deals d JOIN products p ON d.product_id = p.id WHERE d.id = $1",
         [deal_id]
       );
       const deal = dealRes.rows[0];
+
+      // Log to Financial Ledger
+      const divisor = parseFloat(deal.seller_commission_amount || deal.commission_amount || 0) + parseFloat(deal.buyer_commission_amount || 0);
+      const buyerGst = (deal.buyer_commission_amount > 0 && divisor > 0)
+        ? deal.platform_gst_amount * (parseFloat(deal.buyer_commission_amount) / divisor)
+        : 0;
+      const totalBuyerCost = parseFloat(deal.amount) + parseFloat(deal.shipping_fee || 0) + parseFloat(deal.buyer_commission_amount || 0) + parseFloat(buyerGst || 0);
+
+      await pool.query(
+        "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status, metadata) VALUES ($1, $2, $3, 'PAYMENT', 'RECEIVED', $4)",
+        [deal_id, deal.buyer_id, totalBuyerCost, JSON.stringify({ method: 'RAZORPAY', payment_id: razorpay_payment_id })]
+      );
 
       // Notify Seller
       try {
