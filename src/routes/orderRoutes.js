@@ -2,23 +2,6 @@ const express = require("express");
 const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware"); // Assuming authMiddleware is defined and imported
 
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-
-// Ensure uploads directory exists
-const uploadDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Multer Storage Configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, `receipt-${Date.now()}${path.extname(file.originalname)}`)
-});
-const upload = multer({ storage });
-
 const orderController = require("../controllers/orderController");
 const cloudUpload = require("../middleware/cloudUpload");
 
@@ -31,7 +14,7 @@ router.get("/buyer/:user_id", authMiddleware, orderController.getBuyerOrders);
 router.get("/user-deals/:user_id", authMiddleware, orderController.getUserDeals);
 router.post("/:id/upload-evidence", authMiddleware, cloudUpload.array("evidence", 5), orderController.uploadEvidence);
 
-router.patch("/:id/mark-paid", authMiddleware, upload.single("receipt"), orderController.markDealAsPaid);
+router.patch("/:id/mark-paid", authMiddleware, cloudUpload.single("receipt"), orderController.markDealAsPaid);
 router.patch("/:id/shipped", authMiddleware, cloudUpload.single("packing_video"), orderController.markShipped);
 router.patch("/:id/delivered", authMiddleware, orderController.markDelivered); // Seller manually marks
 router.patch("/:id/confirm-received", authMiddleware, orderController.confirmReceived); // Buyer manually marks

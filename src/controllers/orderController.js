@@ -154,6 +154,10 @@ exports.getBuyerOrders = async (req, res) => {
 
     const { user_id } = req.params;
 
+    if (String(req.user.id) !== String(user_id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Forbidden: You can only view your own orders." });
+    }
+
     const result = await pool.query(
       `SELECT orders.*, products.title
     FROM orders
@@ -425,6 +429,10 @@ exports.buyNowDirect = async (req, res) => {
 exports.getUserDeals = async (req, res) => {
   try {
     const { user_id } = req.params;
+
+    if (String(req.user.id) !== String(user_id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Forbidden: You can only view your own deals." });
+    }
 
     const result = await pool.query(
       `SELECT d.*, p.title, p.images, 

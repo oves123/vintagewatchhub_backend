@@ -11,13 +11,13 @@ exports.batchRelease = async (req, res) => {
     for (const id of payout_ids) {
       try {
         const payout = await pool.query(
-          "UPDATE escrow_payments SET status = 'released', released_at = NOW(), released_by = $1 WHERE id = $2 AND status = 'held' RETURNING *",
-          [released_by, id]
+          "UPDATE product_deals SET payout_status = 'RELEASED', escrow_status = 'RELEASED', payout_released_at = NOW() WHERE id = $1 AND payout_status = 'PENDING' RETURNING id, seller_id, seller_payout as amount",
+          [id]
         );
         if (payout.rows.length > 0) {
           results.push(payout.rows[0]);
         } else {
-          errors.push({ id, error: "Payout not found or already released" });
+          errors.push({ id, error: "Deal payout not found or already released" });
         }
       } catch (e) {
         errors.push({ id, error: e.message });
@@ -32,12 +32,13 @@ exports.batchRelease = async (req, res) => {
 exports.getPendingPayouts = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT ep.*, u.name as seller_name, pd.title as deal_title
-       FROM escrow_payments ep
-       JOIN users u ON u.id = ep.seller_id
-       LEFT JOIN product_deals pd ON pd.id = ep.deal_id
-       WHERE ep.status = 'held'
-       ORDER BY ep.created_at ASC`
+      `SELECT pd.id, pd.seller_id, pd.seller_payout as amount, pd.payout_status as status, 
+              u.name as seller_name, p.title as deal_title, pd.created_at
+       FROM product_deals pd
+       JOIN users u ON u.id = pd.seller_id
+       JOIN products p ON p.id = pd.product_id
+       WHERE pd.payout_status = 'PENDING'
+       ORDER BY pd.created_at ASC`
     );
     res.json(result.rows);
   } catch (e) {
