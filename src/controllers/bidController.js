@@ -44,18 +44,7 @@ exports.placeBid = async (req, res) => {
     const sellerRes = await client.query("SELECT state FROM users WHERE id = $1", [product.seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      await client.query('ROLLBACK');
-      let scopeMsg;
-      if (!seller || !seller.state) {
-        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
-      } else if (!buyer || !buyer.state) {
-        scopeMsg = "Please complete your profile by adding your state before placing a bid.";
-      } else {
-        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can bid on this item.`;
-      }
-      return res.status(403).json({ message: scopeMsg });
-    }
+
 
     if (new Date(product.auction_end) < new Date()) {
       await client.query('ROLLBACK');

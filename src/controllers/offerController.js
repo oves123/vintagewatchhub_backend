@@ -31,17 +31,7 @@ exports.createOffer = async (req, res) => {
     const sellerRes = await pool.query("SELECT state FROM users WHERE id = $1", [seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      let scopeMsg;
-      if (!seller || !seller.state) {
-        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept offers until their profile is complete.";
-      } else if (!buyer || !buyer.state) {
-        scopeMsg = "Please complete your profile by adding your state before making an offer.";
-      } else {
-        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can make offers on this item.`;
-      }
-      return res.status(403).json({ message: scopeMsg });
-    }
+
 
     // 2. Check offer limit (5 per product/buyer)
     const limitCheck = await pool.query(

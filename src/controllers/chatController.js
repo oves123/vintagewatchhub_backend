@@ -269,10 +269,7 @@ exports.confirmDirectDeal = async (req, res) => {
     const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [chat.seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ message: "Shipping restricted: Buyer and seller must be in the same state for local shipping." });
-    }
+
 
     const isVerified = seller && seller.is_verified;
     const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;

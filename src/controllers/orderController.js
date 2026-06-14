@@ -63,18 +63,7 @@ exports.createAuctionWinnerOrder = async (req, res) => {
     const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      await client.query('ROLLBACK');
-      let scopeMsg;
-      if (!seller || !seller.state) {
-        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
-      } else if (!buyer || !buyer.state) {
-        scopeMsg = "Please complete your profile by adding your state before purchasing.";
-      } else {
-        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
-      }
-      return res.status(403).json({ message: scopeMsg });
-    }
+
 
     const isVerified = seller && seller.is_verified;
     const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
@@ -210,18 +199,7 @@ exports.createOrder = async (req, res) => {
     const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      await client.query('ROLLBACK');
-      let scopeMsg;
-      if (!seller || !seller.state) {
-        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
-      } else if (!buyer || !buyer.state) {
-        scopeMsg = "Please complete your profile by adding your state before purchasing.";
-      } else {
-        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
-      }
-      return res.status(403).json({ message: scopeMsg });
-    }
+
 
     const isVerified = seller && seller.is_verified;
     const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
@@ -240,8 +218,8 @@ exports.createOrder = async (req, res) => {
     const tcs_amount = fin.tcsAmt;
     const seller_payout = fin.sellerPayout;
 
-    const initialPaymentStatus = product.shipping_type === 'contact' ? 'AWAITING_QUOTE' : 'PENDING';
-    const dbShippingFee = product.shipping_type === 'contact' ? null : shippingFee;
+    const initialPaymentStatus = 'PENDING';
+    const dbShippingFee = shippingFee;
 
     // 3. Create Product Deal
     const result = await client.query(
@@ -267,7 +245,7 @@ exports.createOrder = async (req, res) => {
     await client.query('COMMIT');
 
     res.json({
-      message: initialPaymentStatus === 'AWAITING_QUOTE' ? "Order created. Waiting for seller to quote shipping." : "Order created successfully. Please complete the payment.",
+      message: "Order created successfully. Please complete the payment.",
       deal: result.rows[0]
     });
 
@@ -346,18 +324,7 @@ exports.buyNowDirect = async (req, res) => {
     const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
     const seller = sellerRes.rows[0];
 
-    if (product.shipping_scope === 'LOCAL' && (!buyer || !seller || buyer.state !== seller.state)) {
-      await client.query('ROLLBACK');
-      let scopeMsg;
-      if (!seller || !seller.state) {
-        scopeMsg = "This seller has not completed their profile (state is missing). They cannot accept orders until their profile is complete.";
-      } else if (!buyer || !buyer.state) {
-        scopeMsg = "Please complete your profile by adding your state before purchasing.";
-      } else {
-        scopeMsg = `Shipping Restricted: This seller only ships within ${seller.state}. You are in ${buyer.state}. Only buyers in ${seller.state} can purchase this item.`;
-      }
-      return res.status(403).json({ message: scopeMsg });
-    }
+
 
     const isVerified = seller && seller.is_verified;
     const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
@@ -379,8 +346,8 @@ exports.buyNowDirect = async (req, res) => {
       [product_id]
     );
 
-    const initialPaymentStatus = product.shipping_type === 'contact' ? 'AWAITING_QUOTE' : 'PENDING';
-    const dbShippingFee = product.shipping_type === 'contact' ? null : shippingFee;
+    const initialPaymentStatus = 'PENDING';
+    const dbShippingFee = shippingFee;
 
     const result = await client.query(
       `INSERT INTO product_deals (
@@ -403,7 +370,7 @@ exports.buyNowDirect = async (req, res) => {
     await client.query('COMMIT');
 
     res.json({ 
-      message: initialPaymentStatus === 'AWAITING_QUOTE' ? "Deal secured. Waiting for seller to quote shipping." : "Deal secured successfully. Please complete the payment.", 
+      message: "Deal secured successfully. Please complete the payment.", 
       deal: result.rows[0] 
     });
 
