@@ -124,9 +124,9 @@ exports.getUserActivity = async (req, res) => {
        ORDER BY p.created_at DESC`, [id]
     );
 
-    // Fetch Listings (Active/Draft)
+    // Fetch Listings (Active/Draft/Under Offer)
     const listings = await pool.query(
-      "SELECT * FROM products WHERE seller_id = $1 ORDER BY created_at DESC", [id]
+      "SELECT * FROM products WHERE seller_id = $1 AND status != 'sold' ORDER BY created_at DESC", [id]
     );
 
     const parseJSONFields = (rows) => rows.map(row => {

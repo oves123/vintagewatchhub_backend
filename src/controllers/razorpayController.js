@@ -107,6 +107,12 @@ exports.verifyRazorpayPayment = async (req, res) => {
       );
       const deal = dealRes.rows[0];
 
+      // Update product status to sold
+      await pool.query(
+        "UPDATE products SET status = 'sold' WHERE id = $1",
+        [deal.product_id]
+      );
+
       // Log to Financial Ledger
       const divisor = parseFloat(deal.seller_commission_amount || deal.commission_amount || 0) + parseFloat(deal.buyer_commission_amount || 0);
       const buyerGst = (deal.buyer_commission_amount > 0 && divisor > 0)

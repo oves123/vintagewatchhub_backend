@@ -35,7 +35,7 @@ const sendEmail = async (options) => {
 
   // 2. Define email options
   const mailOptions = {
-    from: `Aera <${process.env.EMAIL_FROM || 'support@aera.com'}>`,
+    from: `AeraVintage <${process.env.EMAIL_FROM || 'support@aeravintage.com'}>`,
     to: options.email,
     subject: options.subject,
     text: options.message,

@@ -404,11 +404,13 @@ exports.getUserDeals = async (req, res) => {
     const result = await pool.query(
       `SELECT d.*, p.title, p.images, 
               u_buyer.name as buyer_name, u_seller.name as seller_name,
-              u_seller.payment_methods as seller_payment_info
+              u_seller.payment_methods as seller_payment_info,
+              r.id as review_id
        FROM product_deals d
        JOIN products p ON d.product_id = p.id
        JOIN users u_buyer ON d.buyer_id = u_buyer.id
        JOIN users u_seller ON d.seller_id = u_seller.id
+       LEFT JOIN reviews r ON r.order_id = d.id AND r.user_id = $1
        WHERE d.buyer_id = $1 OR d.seller_id = $1
        ORDER BY d.created_at DESC`,
       [user_id]

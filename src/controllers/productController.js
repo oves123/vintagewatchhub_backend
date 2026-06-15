@@ -133,6 +133,9 @@ exports.createProduct = async (req, res) => {
       ]
     );
 
+    await cache.delPattern("products:");
+    await cache.delPattern("filter:counts");
+
     res.json({
       message: (status === 'pending' || !status) ? "Listing submitted for review" : "Listing successfully created",
       product: result.rows[0]
@@ -307,6 +310,9 @@ exports.updateProduct = async (req, res) => {
 
     const updatedProduct = result.rows[0];
 
+    await cache.delPattern("products:");
+    await cache.delPattern("filter:counts");
+
     // Trigger price drop alerts if price changed
     if (parseFloat(updatedProduct.price) < parseFloat(product.price)) {
       try {
@@ -349,6 +355,9 @@ exports.deleteProduct = async (req, res) => {
     // Finally delete the product
     await pool.query("DELETE FROM products WHERE id = $1", [id]);
     
+    await cache.delPattern("products:");
+    await cache.delPattern("filter:counts");
+
     res.json({ message: "Product deleted successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -497,6 +506,10 @@ exports.getProducts = async (req, res) => {
                   : sort === "highest_price" ? "ORDER BY products.price DESC"
                   : "ORDER BY products.id DESC";
     }
+
+    console.log("DEBUG getProducts params:", params);
+    console.log("DEBUG getProducts baseWhere:", baseWhere);
+    console.log("DEBUG getProducts orderClause:", orderClause);
 
     // Run count and data queries in parallel
     const [countResult, result] = await Promise.all([
@@ -697,6 +710,9 @@ exports.updateProductStatus = async (req, res) => {
       "UPDATE products SET status = $1 WHERE id = $2 RETURNING *",
       [status, id]
     );
+
+    await cache.delPattern("products:");
+    await cache.delPattern("filter:counts");
 
     res.json({ message: "Status updated", product: result.rows[0] });
   } catch (error) {

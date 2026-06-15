@@ -227,7 +227,7 @@ exports.getProducts = async (req, res) => {
             await notificationService.createNotification({
               user_id: product.seller_id,
               title: "Listing Rejected — Stolen Asset Alert 🚨",
-              message: `Your listing "${product.title}" has been automatically rejected because its serial number is flagged in a stolen assets database. If you believe this is an error, please contact Aera support with proof of ownership.`,
+              message: `Your listing "${product.title}" has been automatically rejected because its serial number is flagged in a stolen assets database. If you believe this is an error, please contact AeraVintage support with proof of ownership.`,
               type: 'error',
               link: '/profile?tab=selling'
             }).catch(() => {});

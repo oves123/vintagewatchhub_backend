@@ -33,8 +33,8 @@ exports.setup2FA = async (req, res) => {
 
     // Generate a new TOTP secret
     const secret = speakeasy.generateSecret({
-      name: `Aera Admin (${req.user.email || "Admin"})`,
-      issuer: "Aera Marketplace",
+      name: `AeraVintage Admin (${req.user.email || "Admin"})`,
+      issuer: "AeraVintage Marketplace",
       length: 32,
     });
 
