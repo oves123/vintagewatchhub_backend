@@ -5,7 +5,6 @@ const authMiddleware = require("../middleware/authMiddleware"); // Assuming auth
 const orderController = require("../controllers/orderController");
 const cloudUpload = require("../middleware/cloudUpload");
 
-router.post("/auction-order", authMiddleware, orderController.createAuctionWinnerOrder);
 router.post("/create", authMiddleware, orderController.createOrder);
 router.post("/buy-now", authMiddleware, orderController.buyNowDirect);
 
@@ -23,5 +22,6 @@ router.patch("/:id/confirm-sale", authMiddleware, cloudUpload.single("unboxing_v
 router.patch("/:id/cancel", authMiddleware, orderController.cancelDeal);
 router.patch("/:id/dispute", authMiddleware, orderController.disputeDeal);
 router.patch("/:id/returned", authMiddleware, orderController.markReturned);
+router.delete("/deal/:id/cancel", authMiddleware, orderController.cancelPendingDeal);
 
 module.exports = router;

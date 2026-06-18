@@ -96,9 +96,41 @@ exports.resolveDispute = async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: "Dispute not found" });
     const dispute = result.rows[0];
+    
+    // Financial Escrow Resolution Logic
     if (status === 'cancelled') {
       await pool.query("UPDATE product_deals SET has_dispute = false WHERE id = $1", [dispute.deal_id]);
+    } else if (status === 'resolved_buyer') {
+      // Refund the buyer, cancel the deal
+      await pool.query(
+        "UPDATE product_deals SET status = 'CANCELLED', payout_status = 'REFUND_PENDING', has_dispute = false WHERE id = $1", 
+        [dispute.deal_id]
+      );
+      // Item goes back to market
+      await pool.query(
+        "UPDATE products SET status = 'approved' WHERE id = (SELECT product_id FROM product_deals WHERE id = $1)",
+        [dispute.deal_id]
+      );
+    } else if (status === 'resolved_seller') {
+      // Release escrow to seller
+      const dealRes = await pool.query(
+        "UPDATE product_deals SET status = 'CONFIRMED', payout_status = 'RELEASED', escrow_status = 'RELEASED', payout_released_at = NOW(), has_dispute = false WHERE id = $1 RETURNING seller_id, seller_payout, total_platform_fee",
+        [dispute.deal_id]
+      );
+      const deal = dealRes.rows[0];
+      if (deal) {
+        // Log to financial ledger
+        await pool.query(
+          "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
+          [dispute.deal_id, deal.seller_id, deal.seller_payout]
+        );
+        await pool.query(
+          "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
+          [dispute.deal_id, null, deal.total_platform_fee]
+        );
+      }
     }
+    
     res.json(dispute);
   } catch (e) {
     res.status(500).json({ error: e.message });

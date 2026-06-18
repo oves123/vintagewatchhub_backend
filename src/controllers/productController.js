@@ -66,8 +66,17 @@ exports.createProduct = async (req, res) => {
 
     const isTrue = (v) => v === true || v === 'true';
     const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;
+    if (optionsCount === 0) {
+      return res.status(400).json({ error: "You must select at least one listing option (Buy Now, Auction, or Offers)." });
+    }
     if (optionsCount > 2) {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
+    }
+    if (isTrue(allow_buy_now) && (!buy_it_now_price || parseFloat(buy_it_now_price) <= 0)) {
+      return res.status(400).json({ error: "Buy It Now price must be greater than 0 if allowed." });
+    }
+    if (isTrue(allow_auction) && (!starting_bid || parseFloat(starting_bid) <= 0)) {
+      return res.status(400).json({ error: "Starting bid must be greater than 0 if auction is allowed." });
     }
 
     if (status !== 'draft' && !hasVideo) {
@@ -175,8 +184,17 @@ exports.updateProduct = async (req, res) => {
     // Listing Options Validation (Max 2 out of 3)
     const isTrue = (v) => v === true || v === 'true';
     const optionsCount = [isTrue(allow_buy_now), isTrue(allow_auction), isTrue(allow_offers)].filter(Boolean).length;
+    if (optionsCount === 0) {
+      return res.status(400).json({ error: "You must select at least one listing option (Buy Now, Auction, or Offers)." });
+    }
     if (optionsCount > 2) {
       return res.status(400).json({ error: "You can select a maximum of two listing options (Buy Now, Auction, or Offers)." });
+    }
+    if (isTrue(allow_buy_now) && (!buy_it_now_price || parseFloat(buy_it_now_price) <= 0)) {
+      return res.status(400).json({ error: "Buy It Now price must be greater than 0 if allowed." });
+    }
+    if (isTrue(allow_auction) && (!starting_bid || parseFloat(starting_bid) <= 0)) {
+      return res.status(400).json({ error: "Starting bid must be greater than 0 if auction is allowed." });
     }
 
     // Ownership and existence check
@@ -212,13 +230,17 @@ exports.updateProduct = async (req, res) => {
       // Admins can set or maintain any status
       finalStatus = status || product.status;
     } else {
+      const userResult = await pool.query("SELECT is_verified FROM users WHERE id = $1", [requesterId]);
+      const isVerified = userResult.rows.length > 0 && userResult.rows[0].is_verified;
       // Sellers attempting to update a listing:
       if (status === 'draft') {
          // Allowed to save as draft
          finalStatus = 'draft';
+      } else if (isVerified) {
+         // Verified sellers maintain approved status
+         finalStatus = 'approved';
       } else {
-         // ANY other edit by a seller forces the listing into 'pending' for re-review.
-         // This completely prevents the "Sneaky Edit" where a seller modifies an approved watch.
+         // ANY other edit by an unverified seller forces the listing into 'pending' for re-review.
          finalStatus = 'pending';
       }
     }
@@ -457,7 +479,15 @@ exports.getProducts = async (req, res) => {
 
     if (category) {
       params.push(category);
-      baseWhere += ` AND categories.name ILIKE $${params.length}`;
+      // Match exact category OR any sub-category whose parent matches the search name
+      baseWhere += ` AND (
+        categories.name ILIKE $${params.length}
+        OR categories.id IN (
+          SELECT c2.id FROM categories c2
+          JOIN categories c1 ON c2.parent_id = c1.id
+          WHERE c1.name ILIKE $${params.length}
+        )
+      )`;
     }
 
     if (brand) {
@@ -671,14 +701,29 @@ exports.getCategories = async (req, res) => {
     const specsResult = await pool.query("SELECT * FROM category_specs ORDER BY id ASC");
     const conditionResult = await pool.query("SELECT * FROM condition_templates ORDER BY id ASC");
 
-    const categoriesWithSpecs = categoriesResult.rows.map(cat => ({
+    // Attach specs and conditions to each category
+    const allCats = categoriesResult.rows.map(cat => ({
       ...cat,
       specs: specsResult.rows.filter(spec => spec.category_id === cat.id),
-      conditions: conditionResult.rows.filter(c => c.category_id === cat.id)
+      conditions: conditionResult.rows.filter(c => c.category_id === cat.id),
+      children: []
     }));
 
-    cache.set("categories", categoriesWithSpecs);
-    res.json(categoriesWithSpecs);
+    // Build hierarchical tree
+    const catMap = {};
+    allCats.forEach(c => { catMap[c.id] = c; });
+
+    const tree = [];
+    allCats.forEach(c => {
+      if (c.parent_id && catMap[c.parent_id]) {
+        catMap[c.parent_id].children.push(c);
+      } else {
+        tree.push(c);
+      }
+    });
+
+    cache.set("categories", tree);
+    res.json(tree);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -735,5 +780,50 @@ exports.recordProductView = async (req, res) => {
   } catch (error) {
     console.error("View recording failed:", error.message);
     res.json({ message: "View recorded" });
+  }
+};
+
+exports.deleteProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requesterId = req.user.id;
+    const requesterRole = req.user.role;
+
+    // Check ownership
+    const productRes = await pool.query("SELECT seller_id FROM products WHERE id = $1", [id]);
+    if (productRes.rows.length === 0) return res.status(404).json({ message: "Product not found" });
+    
+    const product = productRes.rows[0];
+
+    if (parseInt(product.seller_id) !== parseInt(requesterId) && requesterRole !== 'admin') {
+      return res.status(403).json({ message: "Access denied. You can only delete your own listings." });
+    }
+
+    // Safety check: Prevent deletion if there are active deals (ACCEPTED, PAID, SHIPPED)
+    const activeDeals = await pool.query(
+      "SELECT id FROM product_deals WHERE product_id = $1 AND status IN ('ACCEPTED', 'PAID', 'SHIPPED')",
+      [id]
+    );
+    if (activeDeals.rows.length > 0) {
+      return res.status(400).json({ error: "Cannot delete this listing because it has an active or completed transaction." });
+    }
+
+    // Delete associated entries first (bids, offers, views, watchlist, deals) to avoid FK constraint errors
+    await pool.query("DELETE FROM bids WHERE product_id = $1", [id]);
+    await pool.query("DELETE FROM offers WHERE product_id = $1", [id]);
+    await pool.query("DELETE FROM product_views WHERE product_id = $1", [id]);
+    await pool.query("DELETE FROM watchlist WHERE product_id = $1", [id]);
+    await pool.query("DELETE FROM product_deals WHERE product_id = $1", [id]);
+    
+    // Finally delete the product
+    await pool.query("DELETE FROM products WHERE id = $1", [id]);
+
+    await cache.delPattern("products:");
+    await cache.delPattern("filter:counts");
+
+    res.json({ message: "Product deleted successfully" });
+  } catch (error) {
+    console.error("Delete Product Error:", error);
+    res.status(500).json({ error: error.message });
   }
 };

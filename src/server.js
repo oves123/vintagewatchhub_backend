@@ -31,6 +31,7 @@ const labelRoutes = require("./routes/labelRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const featureRoutes = require("./routes/featureRoutes");
 const imageRoutes = require("./routes/imageRoutes");
+const bountyRoutes = require("./routes/bountyRoutes");
 
 const app = express();
 const server = http.createServer(app);
@@ -97,6 +98,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/labels", labelRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/features", featureRoutes);
+app.use("/api/bounties", bountyRoutes);
 app.use("/api", chatRoutes);
 
 // 404 handler

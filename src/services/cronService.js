@@ -3,14 +3,14 @@ const pool = require('../config/db');
 
 const cronService = {
   init: () => {
-    // Run every 30 minutes — clean up expired ACCEPTED deals (unpaid)
-    cron.schedule('*/30 * * * *', async () => {
+    // Run every 5 minutes — clean up expired ACCEPTED deals (unpaid)
+    cron.schedule('*/5 * * * *', async () => {
       console.log('🧹 Running automated unpaid deal cleanup...');
       try {
         const expiredDeals = await pool.query(`
           UPDATE product_deals 
           SET status = 'EXPIRED' 
-          WHERE status = 'ACCEPTED' AND expires_at < CURRENT_TIMESTAMP
+          WHERE status = 'ACCEPTED' AND payment_status = 'PENDING' AND expires_at < CURRENT_TIMESTAMP
           RETURNING product_id
         `);
 
@@ -32,6 +32,38 @@ const cronService = {
         }
       } catch (error) {
         console.error('❌ Cron unpaid deal cleanup failed:', error.message);
+      }
+    });
+
+    // Run every hour — clean up expired AWAITING_QUOTE deals (seller didn't quote in 48 hours)
+    cron.schedule('0 * * * *', async () => {
+      console.log('🧹 Running automated awaiting_quote deal cleanup...');
+      try {
+        const expiredQuoteDeals = await pool.query(`
+          UPDATE product_deals 
+          SET status = 'EXPIRED', cancel_reason = 'Seller failed to provide a shipping quote in time.'
+          WHERE status = 'ACCEPTED' AND payment_status = 'AWAITING_QUOTE' AND created_at < CURRENT_TIMESTAMP - INTERVAL '48 hours'
+          RETURNING product_id
+        `);
+
+        if (expiredQuoteDeals.rows.length > 0) {
+          console.log(`⏳ Expired ${expiredQuoteDeals.rows.length} deals due to missing shipping quote.`);
+          const quoteProductIds = [...new Set(expiredQuoteDeals.rows.map(r => r.product_id))];
+          for (const pid of quoteProductIds) {
+            await pool.query(`
+              UPDATE products 
+              SET status = 'approved',
+                  auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+              WHERE id = $1 AND status = 'under_offer'
+              AND NOT EXISTS (
+                SELECT 1 FROM product_deals 
+                WHERE product_id = $1 AND status IN ('ACCEPTED', 'SHIPPED', 'DELIVERED')
+              )
+            `, [pid]);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Cron quote cleanup failed:', error.message);
       }
     });
 
@@ -59,6 +91,7 @@ const cronService = {
               updated_at = CURRENT_TIMESTAMP
           WHERE status = 'DELIVERED' 
             AND seller_delivered_at < CURRENT_TIMESTAMP - INTERVAL '48 hours'
+            AND (has_dispute IS NULL OR has_dispute = false)
           RETURNING id, seller_id, seller_payout, product_id, total_platform_fee
         `);
 
@@ -151,7 +184,8 @@ const cronService = {
                 hasGst: !!seller?.gst_number,
               });
 
-            const expiresAt = new Date(Date.now() + window * 3600000);
+            // 24 hours to pay for auction winners
+            const expiresAt = new Date(Date.now() + 24 * 3600000);
 
             // ─── ATOMIC TRANSACTION ──────────────────────────────────────────────
             await txClient.query('BEGIN');
@@ -162,12 +196,12 @@ const cronService = {
                 commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
                 seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
                 buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
-              ) VALUES ($1,$2,$3,$4,$5,$6,'ACCEPTED',$7,$8,$9,$10,$11,$12,$13,$14,'PENDING',$15,$16,$17,$18,$19,$20)`,
+              ) VALUES ($1,$2,$3,$4,$5,$6,'ACCEPTED',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
               [
                 row.product_id, winBid.user_id, product.seller_id, price, shippingFee, product.shipping_type, expiresAt,
                 sellerComm, sellerCommAmt, platformGst, totalFee, sellerPayout,
                 seller?.seller_type === 'business_seller', seller?.gst_number,
-                tcsRate, tcsAmt,
+                product.shipping_type === 'custom' ? 'AWAITING_QUOTE' : 'PENDING', tcsRate, tcsAmt,
                 buyerComm, buyerCommAmt, sellerComm, sellerCommAmt
               ]
             );

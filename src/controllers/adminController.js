@@ -452,10 +452,11 @@ exports.getProducts = async (req, res) => {
           return res.status(400).json({ error: "Invalid resolution status. Must be CONFIRMED, CANCELLED, or DISPUTED." });
         }
 
-        const result = await pool.query(
-          "UPDATE product_deals SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
-          [status, id]
-        );
+        const updateQuery = status === 'CONFIRMED' 
+          ? "UPDATE product_deals SET status = $1, payout_status = 'RELEASED', payout_released_at = CURRENT_TIMESTAMP, updated_at = NOW() WHERE id = $2 RETURNING *"
+          : "UPDATE product_deals SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *";
+
+        const result = await pool.query(updateQuery, [status, id]);
 
         if (result.rowCount === 0) return res.status(404).json({ error: "Deal not found" });
 
@@ -466,6 +467,23 @@ exports.getProducts = async (req, res) => {
           SET status = 'approved',
               auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
           WHERE id = $1`, [result.rows[0].product_id]
+          );
+        }
+
+        // If confirmed, release payout to ledger
+        if (status === 'CONFIRMED') {
+          const deal = result.rows[0];
+          await pool.query(
+            "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
+            [id, deal.seller_id, deal.seller_payout]
+          );
+          await pool.query(
+            "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
+            [id, null, deal.total_platform_fee]
+          );
+          await pool.query(
+            "UPDATE products SET status = 'sold' WHERE id = $1 AND status != 'sold'",
+            [deal.product_id]
           );
         }
 
@@ -1079,12 +1097,13 @@ exports.getProducts = async (req, res) => {
 
     exports.createCategory = async (req, res) => {
       try {
-        const { name, description } = req.body;
+        const { name, description, parent_id } = req.body;
         if (!name) return res.status(400).json({ error: "Category name is required" });
         const result = await pool.query(
-          "INSERT INTO categories (name, description) VALUES ($1, $2) RETURNING *",
-          [name, description || null]
+          "INSERT INTO categories (name, description, parent_id) VALUES ($1, $2, $3) RETURNING *",
+          [name, description || null, parent_id || null]
         );
+        await cache.del("categories");
         await logAdminAction(req.user?.id, "CREATE", "Category", result.rows[0].id, `Created category: ${name}`);
         res.status(201).json(result.rows[0]);
       } catch (error) {
@@ -1096,12 +1115,17 @@ exports.getProducts = async (req, res) => {
     exports.updateCategory = async (req, res) => {
       try {
         const { id } = req.params;
-        const { name, description } = req.body;
+        const { name, description, parent_id } = req.body;
+        // Prevent a category from becoming its own parent
+        if (parent_id && parseInt(parent_id) === parseInt(id)) {
+          return res.status(400).json({ error: "A category cannot be its own parent." });
+        }
         const result = await pool.query(
-          "UPDATE categories SET name = COALESCE($1, name), description = COALESCE($2, description) WHERE id = $3 RETURNING *",
-          [name, description, id]
+          "UPDATE categories SET name = COALESCE($1, name), description = COALESCE($2, description), parent_id = $3 WHERE id = $4 RETURNING *",
+          [name, description, parent_id || null, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: "Category not found" });
+        await cache.del("categories");
         await logAdminAction(req.user?.id, "UPDATE", "Category", id, `Updated category: ${name || ''}`);
         res.json(result.rows[0]);
       } catch (error) {
@@ -1180,9 +1204,13 @@ exports.getProducts = async (req, res) => {
     exports.deleteCategory = async (req, res) => {
       try {
         const { id } = req.params;
-        await pool.query("UPDATE products SET category_id = NULL WHERE category_id = $1", [id]);
+        // Nullify products in this category AND its children
+        await pool.query("UPDATE products SET category_id = NULL WHERE category_id = $1 OR category_id IN (SELECT id FROM categories WHERE parent_id = $1)", [id]);
+        // Orphan children (make them top-level) instead of cascading delete
+        await pool.query("UPDATE categories SET parent_id = NULL WHERE parent_id = $1", [id]);
         const result = await pool.query("DELETE FROM categories WHERE id = $1 RETURNING *", [id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Category not found" });
+        await cache.del("categories");
         await logAdminAction(req.user?.id, "DELETE", "Category", id, `Deleted category: ${result.rows[0].name}`);
         res.json({ success: true });
       } catch (error) {
@@ -1245,5 +1273,37 @@ exports.getProducts = async (req, res) => {
         res.json(result.rows);
       } catch (error) {
         res.status(500).json({ error: "Failed to fetch audit log" });
+      }
+    };
+
+    // ── Authentication Hub ──
+
+    exports.markHubReceived = async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await pool.query(
+          "UPDATE product_deals SET hub_received_at = NOW(), status = 'HUB_RECEIVED' WHERE id = $1 RETURNING *",
+          [id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Deal not found" });
+        await logAdminAction(req.user?.id, "UPDATE", "Order", id, `Marked order as received at Hub`);
+        res.json({ success: true, deal: result.rows[0] });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    };
+
+    exports.markHubAuthenticated = async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await pool.query(
+          "UPDATE product_deals SET authenticated_at = NOW(), status = 'AUTHENTICATED' WHERE id = $1 RETURNING *",
+          [id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: "Deal not found" });
+        await logAdminAction(req.user?.id, "UPDATE", "Order", id, `Marked order as Authenticated`);
+        res.json({ success: true, deal: result.rows[0] });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
       }
     };

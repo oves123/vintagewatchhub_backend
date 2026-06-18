@@ -55,4 +55,8 @@ router.get("/financials", adminMiddleware, adminController.getFinancials);
 router.get("/financial-ledger", adminMiddleware, adminController.getGlobalFinancialLedger);
 router.get("/tax-report", adminMiddleware, adminController.getTaxReport);
 
+// Authentication Hub
+router.patch("/deals/:id/mark-hub-received", adminMiddleware, adminController.markHubReceived);
+router.patch("/deals/:id/mark-hub-authenticated", adminMiddleware, adminController.markHubAuthenticated);
+
 module.exports = router;

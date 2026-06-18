@@ -2,141 +2,6 @@ const pool = require("../config/db");
 const notificationService = require("../services/notificationService");
 const { calculateDealFinancials } = require("../utils/commissionCalculator");
 
-exports.createAuctionWinnerOrder = async (req, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { product_id } = req.body;
-
-    // 1. Lock product for update and check if it exists
-    const productResult = await client.query(`SELECT * FROM products WHERE id=$1 FOR UPDATE`, [product_id]);
-    const product = productResult.rows[0];
-    if (!product) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ message: "Product not found" });
-    }
-
-    // Check if a deal already exists
-    const dealCheck = await client.query("SELECT id FROM product_deals WHERE product_id = $1 AND status NOT IN ('CANCELLED', 'RETURNED', 'EXPIRED')", [product_id]);
-    if (dealCheck.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: "A deal already exists for this auction winner" });
-    }
-
-    if (new Date(product.auction_end) > new Date()) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: "Auction is still live. Cannot create winner order yet." });
-    }
-
-    // 2. Get highest bid
-    const bidResult = await client.query(
-      `SELECT * FROM bids WHERE product_id=$1 ORDER BY bid_amount DESC LIMIT 1`,
-      [product_id]
-    );
-
-    if (bidResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: "No bids found for this auction" });
-    }
-
-    const highestBid = bidResult.rows[0];
-
-    if (product.reserve_price && parseFloat(highestBid.bid_amount) < parseFloat(product.reserve_price)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: "Reserve price not met. Auction closed with no winner." });
-    }
-
-    // 3. Fetch platform settings and seller details
-    const settingsRes = await client.query("SELECT key, value FROM platform_settings WHERE key IN ('seller_commission_rate', 'buyer_commission_rate', 'gst_rate', 'verified_seller_shipment_window', 'unverified_seller_shipment_window')");
-    const settings = {};
-    settingsRes.rows.forEach(r => settings[r.key] = r.value);
-    
-    const sellerCommissionRate = parseFloat(settings.seller_commission_rate || 5);
-    const buyerCommissionRate = parseFloat(settings.buyer_commission_rate || 0);
-    const gstRate = parseFloat(settings.gst_rate || 18);
-    const verifiedWindow = parseInt(settings.verified_seller_shipment_window || 48);
-    const unverifiedWindow = parseInt(settings.unverified_seller_shipment_window || 72);
-
-    const buyerRes = await client.query("SELECT state FROM users WHERE id = $1", [highestBid.user_id]);
-    const buyer = buyerRes.rows[0];
-
-    const sellerRes = await client.query("SELECT state, seller_type, gst_number, is_verified FROM users WHERE id = $1", [product.seller_id]);
-    const seller = sellerRes.rows[0];
-
-
-
-    const isVerified = seller && seller.is_verified;
-    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
-
-    const productPrice = parseFloat(highestBid.bid_amount);
-    const shippingFee = (product.shipping_type === 'fixed') ? parseFloat(product.shipping_fee || 0) : 0;
-    
-    const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
-    const seller_commission_amount = fin.sellerCommAmt;
-    const buyer_commission_amount = fin.buyerCommAmt;
-    const platform_gst_amount = fin.platformGst;
-    const total_platform_fee = fin.totalFee;
-    const tcs_rate = fin.tcsRate;
-    const tcs_amount = fin.tcsAmt;
-    const seller_payout = fin.sellerPayout;
-
-    // 4. Create Product Deal
-    const result = await client.query(
-      `INSERT INTO product_deals (
-        product_id, buyer_id, seller_id, amount, shipping_fee, shipping_type, status, expires_at,
-        commission_rate, commission_amount, platform_gst_amount, total_platform_fee,
-        seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
-        buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
-      )
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACCEPTED', $7, $8, $9, $10, $11, $12, $13, $14, 'PENDING', $15, $16, $17, $18, $19, $20) RETURNING *`,
-      [
-        product_id, highestBid.user_id, product.seller_id, productPrice, shippingFee, product.shipping_type, expiresAt,
-        sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
-        seller_payout, seller.seller_type === 'business_seller', seller.gst_number, tcs_rate, tcs_amount,
-        buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
-      ]
-    );
-
-    // 5. Update product status
-    await client.query("UPDATE products SET status = 'under_offer' WHERE id = $1", [product_id]);
-
-    await client.query('COMMIT');
-
-    res.json({
-      message: "Auction winner deal created successfully. Please complete the payment.",
-      deal: result.rows[0]
-    });
-
-    // Notify Buyer & Seller
-    try {
-      await notificationService.createNotification({
-        user_id: highestBid.user_id,
-        title: "You Won the Auction! 🏆",
-        message: `Congratulations! You won the auction for "${product.title}". Please complete the payment within ${hoursToAdd} hours.`,
-        type: 'success',
-        link: '/profile?tab=buying',
-        channels: ['in_app', 'email', 'sms', 'whatsapp']
-      });
-
-      await notificationService.createNotification({
-        user_id: product.seller_id,
-        title: "Auction Ended - Item Sold! 🔨",
-        message: `Your auction for "${product.title}" has ended with a winning bid of ₹${productPrice.toLocaleString()}. Waiting for payment.`,
-        type: 'success',
-        link: '/profile?tab=selling',
-        channels: ['in_app', 'email', 'sms', 'whatsapp']
-      });
-    } catch (err) { console.error("Auction winner notification failed:", err.message); }
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    res.status(500).json({ error: error.message });
-  } finally {
-    client.release();
-  }
-};
 exports.getBuyerOrders = async (req, res) => {
 
   try {
@@ -218,7 +83,7 @@ exports.createOrder = async (req, res) => {
     const tcs_amount = fin.tcsAmt;
     const seller_payout = fin.sellerPayout;
 
-    const initialPaymentStatus = 'PENDING';
+    const initialPaymentStatus = product.shipping_type === 'custom' ? 'AWAITING_QUOTE' : 'PENDING';
     const dbShippingFee = shippingFee;
 
     // 3. Create Product Deal
@@ -326,10 +191,9 @@ exports.buyNowDirect = async (req, res) => {
 
 
 
-    const isVerified = seller && seller.is_verified;
-    const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
+    // 15-minute Buy Now timeout to prevent cart-jacking
     const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
+    expiresAt.setMinutes(expiresAt.getMinutes() + 15);
 
     const fin = calculateDealFinancials({ price: productPrice, shippingFee, sellerCommRate: sellerCommissionRate, buyerCommRate: buyerCommissionRate, gstRate, hasGst: !!seller.gst_number });
     const seller_commission_amount = fin.sellerCommAmt;
@@ -346,7 +210,7 @@ exports.buyNowDirect = async (req, res) => {
       [product_id]
     );
 
-    const initialPaymentStatus = 'PENDING';
+    const initialPaymentStatus = product.shipping_type === 'custom' ? 'AWAITING_QUOTE' : 'PENDING';
     const dbShippingFee = shippingFee;
 
     const result = await client.query(
@@ -599,7 +463,7 @@ exports.confirmReceived = async (req, res) => {
     const buyer_id = req.user.id;
 
     const result = await pool.query(
-      "UPDATE product_deals SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND buyer_id = $2 AND status = 'SHIPPED' RETURNING *",
+      "UPDATE product_deals SET status = 'DELIVERED', seller_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND buyer_id = $2 AND status = 'SHIPPED' AND (has_dispute IS NULL OR has_dispute = false) RETURNING *",
       [id, buyer_id]
     );
 
@@ -620,7 +484,7 @@ exports.confirmSale = async (req, res) => {
     const unboxing_video = req.file ? req.file.path : null;
 
     const result = await client.query(
-      "UPDATE product_deals SET status = 'CONFIRMED', buyer_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, unboxing_video = $1 WHERE id = $2 AND buyer_id = $3 AND status = 'DELIVERED' RETURNING *",
+      "UPDATE product_deals SET status = 'CONFIRMED', buyer_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, unboxing_video = $1 WHERE id = $2 AND buyer_id = $3 AND status = 'DELIVERED' AND (has_dispute IS NULL OR has_dispute = false) RETURNING *",
       [unboxing_video, id, buyer_id]
     );
 
@@ -636,14 +500,18 @@ exports.confirmSale = async (req, res) => {
       [id]
     );
 
-    // LOG TO FINANCIAL LEDGER (Commission Only - Payout is logged on Admin Escrow Release)
+    // LOG TO FINANCIAL LEDGER
+    await client.query(
+      "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'PAYOUT', 'RELEASED')",
+      [id, deal.seller_id, deal.seller_payout]
+    );
     await client.query(
       "INSERT INTO financial_ledger (deal_id, user_id, amount, type, status) VALUES ($1, $2, $3, 'COMMISSION', 'COLLECTED')",
       [id, null, deal.total_platform_fee]
     );
 
     await client.query('COMMIT');
-    res.json({ message: 'Sale confirmed and finalized. Payout released to seller wallet logic.' });
+    res.json({ message: 'Sale confirmed and finalized. Payout released to seller wallet.' });
 
     // Notify Seller
     try {
@@ -916,6 +784,49 @@ exports.addShippingQuote = async (req, res) => {
     } catch (err) { console.error("Notification error:", err); }
 
     res.json({ message: 'Shipping quote added successfully. Buyer has been notified.', deal: result.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.cancelPendingDeal = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Check if the deal exists, is ACCEPTED, and belongs to the buyer
+    const dealCheck = await client.query(
+      "SELECT * FROM product_deals WHERE id = $1 AND buyer_id = $2 AND status = 'ACCEPTED'", 
+      [id, userId]
+    );
+
+    if (dealCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: "Pending deal not found or not authorized." });
+    }
+
+    const deal = dealCheck.rows[0];
+
+    // Mark deal as EXPIRED
+    await client.query(
+      "UPDATE product_deals SET status = 'EXPIRED', payment_status = 'FAILED', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [id]
+    );
+
+    // Reset product status
+    await client.query(
+      "UPDATE products SET status = 'approved' WHERE id = $1",
+      [deal.product_id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ message: "Deal cancelled and item released." });
   } catch (error) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: error.message });

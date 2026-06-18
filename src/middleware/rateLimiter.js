@@ -1,46 +1,65 @@
-const pool = require("../config/db");
+const rateLimit = require('express-rate-limit');
 
-const WINDOW_MS = 60 * 1000;
-const MAX_REQUESTS = {
-  default: 60,
-  auth: 10,
-  bids: 20,
-  offers: 20,
-  orders: 30,
-  messages: 30,
-  search: 30,
-};
+const WINDOW_MS = 60 * 1000; // 1 minute
 
-const getLimit = (path) => {
-  if (path.includes("/auth/")) return MAX_REQUESTS.auth;
-  if (path.includes("/bids/")) return MAX_REQUESTS.bids;
-  if (path.includes("/offers/")) return MAX_REQUESTS.offers;
-  if (path.includes("/orders/")) return MAX_REQUESTS.orders;
-  if (path.includes("/chat/") || path.includes("/messages")) return MAX_REQUESTS.messages;
-  if (path.includes("/products") && (path.includes("search") || path.includes("?search"))) return MAX_REQUESTS.search;
-  return MAX_REQUESTS.default;
-};
+// Create specific limiters for different routes
+const defaultLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 60,
+  message: { error: "Too many requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
+const authLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 10,
+  message: { error: "Too many authentication requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const bidOfferLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 20,
+  message: { error: "Too many bids/offers placed. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const orderLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 30,
+  message: { error: "Too many order requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const messagesLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 30,
+  message: { error: "Too many messages sent. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const searchLimiter = rateLimit({
+  windowMs: WINDOW_MS,
+  max: 30,
+  message: { error: "Too many search requests. Please slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Dynamic router based on path
 exports.rateLimiter = (req, res, next) => {
-  const identifier = req.ip || req.connection.remoteAddress || "unknown";
-  const limit = getLimit(req.path);
-
-  pool.query(
-    `SELECT COUNT(*) as count FROM rate_limit_log
-     WHERE identifier = $1 AND endpoint = $2 AND attempted_at > NOW() - INTERVAL '1 minute'`,
-    [identifier, req.path]
-  ).then(result => {
-    const count = parseInt(result.rows[0].count);
-    if (count >= limit) {
-      return res.status(429).json({
-        error: "Too many requests. Please slow down.",
-        retryAfter: Math.ceil(WINDOW_MS / 1000)
-      });
-    }
-    pool.query(
-      "INSERT INTO rate_limit_log (identifier, endpoint) VALUES ($1, $2)",
-      [identifier, req.path]
-    ).catch(() => {});
-    next();
-  }).catch(() => next());
+  const path = req.path;
+  
+  if (path.includes("/auth/")) return authLimiter(req, res, next);
+  if (path.includes("/bids/") || path.includes("/offers/")) return bidOfferLimiter(req, res, next);
+  if (path.includes("/orders/")) return orderLimiter(req, res, next);
+  if (path.includes("/chat/") || path.includes("/messages")) return messagesLimiter(req, res, next);
+  if (path.includes("/products") && (path.includes("search") || req.query.search)) return searchLimiter(req, res, next);
+  
+  return defaultLimiter(req, res, next);
 };

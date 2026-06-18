@@ -138,12 +138,9 @@ exports.respondToOffer = async (req, res) => {
         const sellerRes = await client.query("SELECT seller_type, gst_number, is_verified FROM users WHERE id = $1", [offer.seller_id]);
         const seller = sellerRes.rows[0];
 
-        // 4. Set expiry (SHIPMENT WINDOW)
-        const isVerified = seller && seller.is_verified;
-        const hoursToAdd = isVerified ? verifiedWindow : unverifiedWindow;
-        
+        // 4. Set expiry (24 hours to pay for accepted offers)
         const expiresAt = new Date();
-        expiresAt.setHours(expiresAt.getHours() + hoursToAdd);
+        expiresAt.setHours(expiresAt.getHours() + 24);
 
         // Use counter_amount if it was a counter-offer being accepted (by either party), otherwise use original buyer amount
         const finalAmount = parseFloat(
@@ -172,11 +169,11 @@ exports.respondToOffer = async (req, res) => {
             seller_payout, seller_gst_applicable, seller_gst_number, payment_status, tcs_rate, tcs_amount,
             buyer_commission_rate, buyer_commission_amount, seller_commission_rate, seller_commission_amount
           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, 'PENDING', $16, $17, $18, $19, $20, $21)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCEPTED', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
           [
             offer.product_id, offer.buyer_id, offer.seller_id, offer.id, finalAmount, shippingFee, product.shipping_type, expiresAt,
             sellerCommissionRate, seller_commission_amount, platform_gst_amount, total_platform_fee,
-            seller_payout, seller_gst_applicable, seller_gst_number, tcs_rate, tcs_amount,
+            seller_payout, seller_gst_applicable, seller_gst_number, product.shipping_type === 'custom' ? 'AWAITING_QUOTE' : 'PENDING', tcs_rate, tcs_amount,
             buyerCommissionRate, buyer_commission_amount, sellerCommissionRate, seller_commission_amount
           ]
         );
