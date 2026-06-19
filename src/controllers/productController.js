@@ -26,6 +26,7 @@ exports.createProduct = async (req, res) => {
       starting_bid,
       auction_end,
       allow_offers,
+      minimum_offer_amount,
       reserve_price,
       video_settings,
       media_order,
@@ -78,6 +79,9 @@ exports.createProduct = async (req, res) => {
     if (isTrue(allow_auction) && (!starting_bid || parseFloat(starting_bid) <= 0)) {
       return res.status(400).json({ error: "Starting bid must be greater than 0 if auction is allowed." });
     }
+    if (isTrue(allow_offers) && (!minimum_offer_amount || parseFloat(minimum_offer_amount) <= 0)) {
+      return res.status(400).json({ error: "Auto-Reject Minimum is mandatory when Accept Offers is enabled." });
+    }
 
     if (status !== 'draft' && !hasVideo) {
       return res.status(400).json({ error: "At least one video is mandatory for listing." });
@@ -110,8 +114,8 @@ exports.createProduct = async (req, res) => {
       `INSERT INTO products
       (title, description, price, seller_id, category_id, product_type, images, 
        condition_code, item_specifics, condition_details, shipping_info, payment_info, status, shipping_fee, shipping_type,
-       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings, shipping_scope, slug)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price, video_settings, shipping_scope, slug, minimum_offer_amount)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       RETURNING *`,
       [
         title, 
@@ -138,7 +142,8 @@ exports.createProduct = async (req, res) => {
         reserve_price || 0,
         JSON.stringify(mappedVideoSettings),
         shipping_scope || 'LOCAL',
-        slug
+        slug,
+        minimum_offer_amount || null
       ]
     );
 
@@ -178,6 +183,7 @@ exports.updateProduct = async (req, res) => {
       condition_code, item_specifics, condition_details, shipping_info, payment_info, status,
       shipping_fee, shipping_type,
       allow_buy_now, buy_it_now_price, allow_auction, starting_bid, auction_end, allow_offers, reserve_price,
+      minimum_offer_amount,
       existing_images, video_settings, media_order, shipping_scope
     } = req.body;
 
@@ -195,6 +201,9 @@ exports.updateProduct = async (req, res) => {
     }
     if (isTrue(allow_auction) && (!starting_bid || parseFloat(starting_bid) <= 0)) {
       return res.status(400).json({ error: "Starting bid must be greater than 0 if auction is allowed." });
+    }
+    if (isTrue(allow_offers) && (!minimum_offer_amount || parseFloat(minimum_offer_amount) <= 0)) {
+      return res.status(400).json({ error: "Auto-Reject Minimum is mandatory when Accept Offers is enabled." });
     }
 
     // Ownership and existence check
@@ -297,8 +306,8 @@ exports.updateProduct = async (req, res) => {
         shipping_fee = $12, shipping_type = $13,
         allow_buy_now = $14, buy_it_now_price = $15, allow_auction = $16,
         starting_bid = $17, auction_end = $18, allow_offers = $19, reserve_price = $20,
-        images = $21, video_settings = $22, shipping_scope = $23, slug = $24
-      WHERE id = $25 RETURNING *`,
+        images = $21, video_settings = $22, shipping_scope = $23, slug = $24, minimum_offer_amount = $25
+      WHERE id = $26 RETURNING *`,
       [
         title, 
         description, 
@@ -324,6 +333,7 @@ exports.updateProduct = async (req, res) => {
         JSON.stringify(mappedVideoSettings),
         shipping_scope || 'LOCAL',
         slug,
+        minimum_offer_amount || null,
         id
       ]
     );

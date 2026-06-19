@@ -9,7 +9,7 @@ exports.createOffer = async (req, res) => {
 
     // 1. Check if product allows offers
     const productCheck = await pool.query(
-      "SELECT allow_offers, status, shipping_scope, seller_id FROM products WHERE id = $1",
+      "SELECT allow_offers, status, shipping_scope, seller_id, minimum_offer_amount FROM products WHERE id = $1",
       [product_id]
     );
 
@@ -22,6 +22,10 @@ exports.createOffer = async (req, res) => {
 
     if (!product.allow_offers) {
        return res.status(400).json({ message: "This product does not accept offers" });
+    }
+
+    if (product.minimum_offer_amount && parseFloat(amount) < parseFloat(product.minimum_offer_amount)) {
+       return res.status(400).json({ message: "Offer Declined. The seller has set a minimum offer threshold higher than your amount. Please try a higher bid." });
     }
 
     // 1.5 Check Geographic Restrictions
