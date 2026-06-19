@@ -5,7 +5,7 @@ const WINDOW_MS = 60 * 1000; // 1 minute
 // Create specific limiters for different routes
 const defaultLimiter = rateLimit({
   windowMs: WINDOW_MS,
-  max: 60,
+  max: 300,
   message: { error: "Too many requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -13,7 +13,7 @@ const defaultLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: WINDOW_MS,
-  max: 10,
+  max: 100,
   message: { error: "Too many authentication requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -21,7 +21,7 @@ const authLimiter = rateLimit({
 
 const bidOfferLimiter = rateLimit({
   windowMs: WINDOW_MS,
-  max: 20,
+  max: 100,
   message: { error: "Too many bids/offers placed. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -29,7 +29,7 @@ const bidOfferLimiter = rateLimit({
 
 const orderLimiter = rateLimit({
   windowMs: WINDOW_MS,
-  max: 30,
+  max: 150,
   message: { error: "Too many order requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
@@ -45,7 +45,7 @@ const messagesLimiter = rateLimit({
 
 const searchLimiter = rateLimit({
   windowMs: WINDOW_MS,
-  max: 30,
+  max: 150,
   message: { error: "Too many search requests. Please slow down." },
   standardHeaders: true,
   legacyHeaders: false,
