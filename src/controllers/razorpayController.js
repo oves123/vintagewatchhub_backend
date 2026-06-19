@@ -3,10 +3,15 @@ const crypto = require("crypto");
 const pool = require("../config/db");
 const notificationService = require("../services/notificationService");
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+let razorpay = null;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+} else {
+  console.warn("WARNING: Razorpay keys are missing. Payment features will fail.");
+}
 
 exports.createRazorpayOrder = async (req, res) => {
   try {
@@ -52,6 +57,10 @@ exports.createRazorpayOrder = async (req, res) => {
       currency: "INR",
       receipt: `receipt_deal_${deal_id}`,
     };
+
+    if (!razorpay) {
+      return res.status(500).json({ error: "Razorpay is not configured on the server." });
+    }
 
     const order = await razorpay.orders.create(options);
 
