@@ -89,10 +89,34 @@ exports.respondToOffer = async (req, res) => {
     }
     const oldOffer = currentRes.rows[0];
 
-    // Authorization Check: Must be the buyer, seller, or admin to interact with the offer
-    if (parseInt(req.user.id) !== parseInt(oldOffer.buyer_id) && parseInt(req.user.id) !== parseInt(oldOffer.seller_id) && req.user.role !== 'admin') {
+    // Expiry Check
+    if (new Date() > new Date(oldOffer.expires_at)) {
+       await client.query('ROLLBACK');
+       return res.status(400).json({ message: "This offer has expired and can no longer be modified." });
+    }
+
+    // Turn-based authorization
+    const isSeller = parseInt(req.user.id) === parseInt(oldOffer.seller_id);
+    const isBuyer = parseInt(req.user.id) === parseInt(oldOffer.buyer_id);
+    
+    if (!isSeller && !isBuyer && req.user.role !== 'admin') {
        await client.query('ROLLBACK');
        return res.status(403).json({ message: "Access denied. You are not a party to this offer." });
+    }
+
+    if (req.user.role !== 'admin') {
+      if (oldOffer.status === 'pending' && !isSeller) {
+         await client.query('ROLLBACK');
+         return res.status(403).json({ message: "Only the seller can respond to a pending offer." });
+      }
+      if (oldOffer.status === 'countered' && !isBuyer) {
+         await client.query('ROLLBACK');
+         return res.status(403).json({ message: "Only the buyer can respond to the seller's counter-offer." });
+      }
+      if (oldOffer.status === 'buyer_countered' && !isSeller) {
+         await client.query('ROLLBACK');
+         return res.status(403).json({ message: "Only the seller can respond to the buyer's counter-offer." });
+      }
     }
 
     if (oldOffer.status !== 'pending' && oldOffer.status !== 'countered' && oldOffer.status !== 'buyer_countered') {
@@ -100,13 +124,31 @@ exports.respondToOffer = async (req, res) => {
        return res.status(400).json({ message: `Offer is already ${oldOffer.status}` });
     }
 
+    let newExpiresAt = oldOffer.expires_at;
+    let newOfferCount = oldOffer.offer_count;
+    
+    if (status === 'countered' || status === 'buyer_countered') {
+       const settingsRes = await client.query("SELECT value FROM platform_settings WHERE key = 'offer_expiry_hours'");
+       const offerExpiryHours = parseInt(settingsRes.rows[0]?.value || 48);
+       newExpiresAt = new Date();
+       newExpiresAt.setHours(newExpiresAt.getHours() + offerExpiryHours);
+       
+       if (status === 'buyer_countered') {
+         newOfferCount = parseInt(oldOffer.offer_count) + 1;
+         if (newOfferCount > 5) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: "You have reached the limit of 5 offers for this item." });
+         }
+       }
+    }
+
     // 2. Update offer status
     const result = await client.query(
       `UPDATE product_offers 
-       SET status = $1, counter_amount = $2
-       WHERE id = $3 
+       SET status = $1, counter_amount = $2, expires_at = $3, offer_count = $4
+       WHERE id = $5 
        RETURNING *`,
-      [status, (status === 'countered' || status === 'buyer_countered') ? counter_amount : oldOffer.counter_amount, id]
+      [status, (status === 'countered' || status === 'buyer_countered') ? counter_amount : oldOffer.counter_amount, newExpiresAt, newOfferCount, id]
     );
 
     const offer = result.rows[0];
@@ -122,9 +164,9 @@ exports.respondToOffer = async (req, res) => {
           return res.status(400).json({ message: "Product is no longer available" });
         }
 
-        // 2. Auto-reject all other pending offers for this product
+        // 2. Auto-reject all other active offers for this product
         await client.query(
-          "UPDATE product_offers SET status = 'rejected' WHERE product_id = $1 AND id != $2 AND status = 'pending'",
+          "UPDATE product_offers SET status = 'rejected' WHERE product_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'buyer_countered')",
           [offer.product_id, offer.id]
         );
 

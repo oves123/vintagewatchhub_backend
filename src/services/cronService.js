@@ -20,8 +20,7 @@ const cronService = {
           for (const pid of productIds) {
             await pool.query(`
               UPDATE products 
-              SET status = 'approved',
-                  auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+              SET status = 'expired'
               WHERE id = $1 AND status = 'under_offer'
               AND NOT EXISTS (
                 SELECT 1 FROM product_deals 
@@ -52,8 +51,7 @@ const cronService = {
           for (const pid of quoteProductIds) {
             await pool.query(`
               UPDATE products 
-              SET status = 'approved',
-                  auction_end = CASE WHEN allow_auction = true AND auction_end < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP + INTERVAL '3 days' ELSE auction_end END
+              SET status = 'expired'
               WHERE id = $1 AND status = 'under_offer'
               AND NOT EXISTS (
                 SELECT 1 FROM product_deals 
